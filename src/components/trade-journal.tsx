@@ -47,7 +47,6 @@ function fetchMiscData(key: string) {
     const stored = localStorage.getItem(`misc_${key}`);
     return stored ? JSON.parse(stored) : null;
   } catch (error) {
-    console.error('Error fetching misc data:', error);
     return null;
   }
 }
@@ -56,7 +55,7 @@ function saveMiscData(key: string, value: any) {
   try {
     localStorage.setItem(`misc_${key}`, JSON.stringify(value));
   } catch (error) {
-    console.error('Error saving misc data:', error);
+    // Handle error silently
   }
 }
 
@@ -408,13 +407,11 @@ export const TradeJournal = React.memo(function TradeJournal({
     try {
       // Prevent editing of non-editable fields
       if (!isEditable(field as string)) {
-        console.warn(`Field ${field} is not editable`);
         return;
       }
 
       const tradeToUpdate = trades.find(t => t.id === tradeId);
       if (!tradeToUpdate) {
-        console.error(`Trade with id ${tradeId} not found`);
         return;
       }
 
@@ -462,13 +459,12 @@ export const TradeJournal = React.memo(function TradeJournal({
       // Update immediately without debouncing to prevent flickering
       try {
         await updateTrade(updatedTrade);
-        console.log('Trade updated successfully:', updatedTrade);
       } catch (error) {
-        console.error('Error updating trade:', error);
+        // Handle error silently
       }
 
     } catch (error) {
-      console.error('Error in handleInlineEditSave:', error);
+      // Handle error silently
     }
   }, [trades, isEditable, portfolioSize, getPortfolioSize, updateTrade]);
 
@@ -912,7 +908,7 @@ export const TradeJournal = React.memo(function TradeJournal({
     }
 
     if (columnKey === 'name') {
-      const fieldsForTooltip = allColumns.slice(allColumns.findIndex(col => col.key === "initialQty"));
+      const fieldsForTooltip = allColumns.slice(allColumns.findIndex(col => col.key === "initialQty")).filter(col => col.key !== 'openHeat');
       const tooltipContent = (
         <div className="p-3 text-xs max-w-2xl break-words">
           <h4 className="font-semibold text-sm mb-2">Trade Details: {trade.name}</h4>
@@ -920,11 +916,18 @@ export const TradeJournal = React.memo(function TradeJournal({
             {fieldsForTooltip.map(col => {
               if (col.key === "actions") return null;
               let value = trade[col.key as keyof Trade];
+              if (col.key === 'unrealizedPL') {
+                if (trade.positionStatus === 'Open' || trade.positionStatus === 'Partial') {
+                  value = calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
+                } else {
+                  value = "-";
+                }
+              }
               if (["pyramid1Date", "pyramid2Date", "exit1Date", "exit2Date", "exit3Date"].includes(col.key)) {
                 value = value ? formatDate(value as string) : "-";
-              } else if (["entry", "avgEntry", "sl", "tsl", "cmp", "pyramid1Price", "pyramid2Price", "exit1Price", "exit2Price", "exit3Price", "avgExitPrice", "realisedAmount", "plRs"].includes(col.key)) {
-                value = formatCurrency(value as number);
-              } else if (["pfImpact", "cummPf", "rewardRisk", "stockMove", "openHeat", "allocation"].includes(col.key)) {
+              } else if (["entry", "avgEntry", "sl", "tsl", "cmp", "pyramid1Price", "pyramid2Price", "exit1Price", "exit2Price", "exit3Price", "avgExitPrice", "realisedAmount", "plRs", "unrealizedPL"].includes(col.key)) {
+                value = typeof value === 'number' ? formatCurrency(value) : value;
+              } else if (["pfImpact", "cummPf", "rewardRisk", "stockMove", "openHeat", "allocation", "slPercent"].includes(col.key)) {
                 let originalValue = Number(value);
                 value = `${originalValue.toFixed(2)}`;
                 if (col.key !== "rewardRisk" && !(col.key.includes("Price") || col.key.includes("Amount") || col.key.includes("Rs"))) {
@@ -1263,8 +1266,6 @@ export const TradeJournal = React.memo(function TradeJournal({
         return val !== undefined && val !== null ? String(val) : "-";
     }
   }, [editingId, handleInlineEditSave, isEditable, portfolioSize, getPortfolioSize]);
-
-  // Removed debug console.log statements to prevent unnecessary re-renders
 
   // Memoize expensive calculations to prevent unnecessary re-renders
   const { totalUnrealizedPL, openPfImpact, totalRealizedPL, realizedPfImpact } = React.useMemo(() => {

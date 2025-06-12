@@ -39,29 +39,67 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
   const { accountingMethod } = useAccountingMethod();
   const useCashBasis = accountingMethod === 'cash';
   const { getPortfolioSize, getAllMonthlyTruePortfolios } = useTruePortfolioWithTrades(trades);
-  const monthlyPortfolios = getAllMonthlyTruePortfolios(useCashBasis);
-  
+
+  // Memoize the monthly portfolios to prevent infinite re-renders
+  const monthlyPortfolios = React.useMemo(() => {
+    return getAllMonthlyTruePortfolios();
+  }, [getAllMonthlyTruePortfolios]);
+
+
+
   // Get the earliest and latest trade dates to determine the date range
-  const sortedTrades = [...trades].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  const startDate = sortedTrades[0]?.date ? new Date(sortedTrades[0].date) : new Date();
-  const endDate = trades.length > 0 ? new Date(trades[trades.length - 1].date) : new Date();
+  // For cash basis, we need to consider exit dates as well
+  const { startDate, endDate } = React.useMemo(() => {
+    const getAllRelevantDates = (trades: any[]) => {
+      const dates: Date[] = [];
+
+      trades.forEach(trade => {
+        // Add entry date
+        if (trade.date) {
+          dates.push(new Date(trade.date));
+        }
+
+        // For cash basis, also add exit dates
+        if (useCashBasis && (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial')) {
+          if (trade.exit1Date) dates.push(new Date(trade.exit1Date));
+          if (trade.exit2Date) dates.push(new Date(trade.exit2Date));
+          if (trade.exit3Date) dates.push(new Date(trade.exit3Date));
+        }
+      });
+
+      return dates.filter(date => !isNaN(date.getTime()));
+    };
+
+    const allDates = getAllRelevantDates(trades);
+    const sortedDates = allDates.sort((a, b) => a.getTime() - b.getTime());
+    return {
+      startDate: sortedDates[0] || new Date(),
+      endDate: sortedDates[sortedDates.length - 1] || new Date()
+    };
+  }, [trades, useCashBasis]);
   
   // Use monthlyPortfolios data which already accounts for capital changes and P/L
-  const processedChartData = monthlyPortfolios.map(monthData => ({
-    month: `${monthData.month} ${monthData.year}`,
-    capital: monthData.finalCapital,
-    pl: monthData.pl,
-    startingCapital: monthData.startingCapital,
-    capitalChanges: monthData.capitalChanges,
-    plPercentage: monthData.startingCapital !== 0 ? (monthData.pl / monthData.startingCapital) * 100 : 0
-  }));
-  
-  // Notify parent component about data update
+  const processedChartData = React.useMemo(() => {
+    return monthlyPortfolios.map(monthData => ({
+      month: `${monthData.month} ${monthData.year}`,
+      capital: monthData.finalCapital,
+      pl: monthData.pl,
+      startingCapital: monthData.startingCapital,
+      capitalChanges: monthData.capitalChanges,
+      plPercentage: monthData.startingCapital !== 0 ? (monthData.pl / monthData.startingCapital) * 100 : 0
+    }));
+  }, [monthlyPortfolios]);
+
+  // Notify parent component about data update with debouncing to prevent infinite loops
   React.useEffect(() => {
     if (onDataUpdate && processedChartData.length > 0) {
-      onDataUpdate(processedChartData);
+      const timeoutId = setTimeout(() => {
+        onDataUpdate(processedChartData);
+      }, 100); // 100ms debounce
+
+      return () => clearTimeout(timeoutId);
     }
-  }, [processedChartData, onDataUpdate]);
+  }, [processedChartData]); // Removed onDataUpdate from dependencies to prevent infinite loop
 
   // Recalculate Drawdown and Volatility based on processedChartData
   const drawdownData = React.useMemo(() => {

@@ -79,11 +79,7 @@ export const AccountingMethodProvider: React.FC<AccountingMethodProviderProps> =
     clearAccountingMethodData
   }), [accountingMethod, setAccountingMethod, toggleAccountingMethod, clearAccountingMethodData]);
 
-  // Don't render children until we've loaded the initial state
-  if (isLoading) {
-    return null; // or a loading spinner if needed
-  }
-
+  // Always render children to prevent hook count mismatches
   return (
     <AccountingMethodContext.Provider value={contextValue}>
       {children}

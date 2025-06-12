@@ -400,361 +400,409 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                 }}
               >
                 <Tab key="yearly" title="Yearly Starting Capital">
-                  <div className="py-3 space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-content1/30 rounded-lg border border-divider/30">
-                      <div className="flex-1">
-                        <p className="text-xs text-foreground-500">
-                          Set starting capital for January of each year
-                        </p>
-                      </div>
-                      <Button
-                        color="primary"
-                        onPress={() => setIsYearlyCapitalModalOpen(true)}
-                        startContent={<Icon icon="lucide:plus" className="w-3 h-3" />}
-                        size="sm"
-                        variant="flat"
-                        className="w-full sm:w-auto flex-shrink-0 text-xs"
+                  <AnimatePresence mode="wait">
+                    {selectedTab === "yearly" && (
+                      <motion.div
+                        key="yearly-content"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        transition={{ duration: 0.2 }}
                       >
-                        Manage Years
-                      </Button>
-                    </div>
-
-                    {sortedYearlyCapitals.length === 0 ? (
-                      <div className="text-center py-6 text-default-500">
-                        <Icon icon="lucide:calendar-x" className="text-2xl mb-2 mx-auto opacity-50" />
-                        <p className="text-sm">No yearly capitals set</p>
-                        <p className="text-xs opacity-70">Click "Manage Years" to start</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {sortedYearlyCapitals.map((yearData) => (
-                          <div
-                            key={yearData.year}
-                            className="flex items-center justify-between p-3 border border-divider/50 rounded-lg bg-background/50 hover:bg-content1/30 transition-colors"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center">
-                                <Icon icon="lucide:calendar" className="w-4 h-4 text-success" />
-                              </div>
-                              <div>
-                                <p className="font-semibold text-sm text-foreground">{yearData.year}</p>
-                                <p className="text-xs text-default-500">{new Date(yearData.updatedAt).toLocaleDateString()}</p>
-                              </div>
+                        <div className="py-3 space-y-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                            <div className="flex-1">
+                              <p className="text-xs text-foreground-500">
+                                Set starting capital for January of each year
+                              </p>
                             </div>
-                            <div className="text-right">
-                              <p className="font-bold text-sm text-success-600">₹{yearData.startingCapital.toLocaleString()}</p>
-                              <p className="text-xs text-default-500">Starting Capital</p>
-                            </div>
+                            <Button
+                              color="primary"
+                              onPress={() => setIsYearlyCapitalModalOpen(true)}
+                              startContent={<Icon icon="lucide:plus" className="w-3 h-3" />}
+                              size="sm"
+                              variant="flat"
+                              className="w-full sm:w-auto flex-shrink-0 text-xs"
+                            >
+                              Manage Years
+                            </Button>
                           </div>
-                        ))}
-                      </div>
+
+                          {sortedYearlyCapitals.length === 0 ? (
+                            <div className="text-center py-6 text-default-500">
+                              <Icon icon="lucide:calendar-x" className="text-2xl mb-2 mx-auto opacity-50" />
+                              <p className="text-sm">No yearly capitals set</p>
+                              <p className="text-xs opacity-70">Click "Manage Years" to start</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {sortedYearlyCapitals.map((yearData) => (
+                                <div
+                                  key={yearData.year}
+                                  className="flex items-center justify-between p-3 border border-divider/50 rounded-lg bg-background/50 hover:bg-content1/30 transition-colors"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center">
+                                      <Icon icon="lucide:calendar" className="w-4 h-4 text-success" />
+                                    </div>
+                                    <div>
+                                      <p className="font-semibold text-sm text-foreground">{yearData.year}</p>
+                                      <p className="text-xs text-default-500">{new Date(yearData.updatedAt).toLocaleDateString()}</p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="font-bold text-sm text-success-600">₹{yearData.startingCapital.toLocaleString()}</p>
+                                    <p className="text-xs text-default-500">Starting Capital</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
                     )}
-                  </div>
+                  </AnimatePresence>
                 </Tab>
                 <Tab key="capital" title="Capital Changes">
-                  <div className="py-3 space-y-3">
-                    <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
-                      Add deposits and withdrawals to track capital changes
-                    </p>
+                  <AnimatePresence mode="wait">
+                    {selectedTab === "capital" && (
+                      <motion.div
+                        key="capital-content"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <div className="py-3 space-y-3">
+                          <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                            Add deposits and withdrawals to track capital changes
+                          </p>
 
-                    {/* Add New Capital Change */}
-                    <div className="border border-divider/50 rounded-lg p-3 bg-background/50">
-                      <h4 className="font-medium text-sm mb-3 flex items-center gap-2">
-                        <Icon icon="lucide:plus-circle" className="w-4 h-4 text-primary" />
-                        Add Capital Change
-                      </h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <Select
-                          label="Month"
-                          selectedKeys={[selectedMonth]}
-                          onSelectionChange={(keys) => setSelectedMonth(Array.from(keys)[0] as string)}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                          aria-label="Select month for capital change"
-                        >
-                          {months.map((month) => (
-                            <SelectItem key={month}>
-                              {month}
-                            </SelectItem>
-                          ))}
-                        </Select>
-                        <Select
-                          label="Year"
-                          selectedKeys={[selectedYear.toString()]}
-                          onSelectionChange={(keys) => setSelectedYear(parseInt(Array.from(keys)[0] as string))}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                          aria-label="Select year for capital change"
-                        >
-                          {years.map((year) => (
-                            <SelectItem key={year}>
-                              {year}
-                            </SelectItem>
-                          ))}
-                        </Select>
-                        <Select
-                          label="Capital Type"
-                          selectedKeys={[newCapitalType]}
-                          onSelectionChange={(keys) => setNewCapitalType(Array.from(keys)[0] as 'deposit' | 'withdrawal')}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                          aria-label="Select capital change type"
-                        >
-                          <SelectItem key="deposit">Deposit</SelectItem>
-                          <SelectItem key="withdrawal">Withdrawal</SelectItem>
-                        </Select>
-                        <Input
-                          label="Description (optional)"
-                          placeholder="e.g., Q1 bonus, new investment"
-                          value={newCapitalDescription}
-                          onValueChange={setNewCapitalDescription}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                        />
-                        <Input
-                          label="Amount"
-                          placeholder="e.g., 100000"
-                          value={newCapitalAmount}
-                          onValueChange={setNewCapitalAmount}
-                          type="number"
-                          min="0"
-                          step="1000"
-                          startContent={<span className="text-default-400 text-lg">₹</span>}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                        />
-                        <Button
-                          color="primary"
-                          onPress={handleAddCapitalChange}
-                          isDisabled={isNaN(parseFloat(newCapitalAmount)) || parseFloat(newCapitalAmount) <= 0}
-                          startContent={<Icon icon="lucide:plus" />}
-                          className="w-full"
-                          size="sm"
-                        >
-                          Add Capital Change
-                        </Button>
-                      </div>
-
-                      <h4 className="font-semibold text-lg mb-2">Capital Change History</h4>
-                      {sortedCapitalChanges.length === 0 ? (
-                        <div className="text-center py-8 text-default-500">
-                          <Icon icon="lucide:dollar-sign" className="text-4xl mb-2 mx-auto" />
-                          <p>No capital changes recorded yet.</p>
-                          <p className="text-sm">Add a capital change above.</p>
-                        </div>
-                      ) : (
-                        <Table
-                          aria-label="Capital Changes Table"
-                          selectionMode="single"
-                          // onRowAction={(key) => handleEditCapitalChange(key as string)}
-                          classNames={{
-                            wrapper: "min-h-[200px]",
-                            th: "bg-transparent border-b border-divider text-xs font-medium text-default-500 dark:text-default-300 uppercase tracking-wider",
-                            td: "py-2.5 text-sm"
-                          }}
-                        >
-                          <TableHeader>
-                            <TableColumn key="date" allowsSorting={true}>Date</TableColumn>
-                            <TableColumn key="type" allowsSorting={true}>Type</TableColumn>
-                            <TableColumn key="amount" allowsSorting={true}>Amount</TableColumn>
-                            <TableColumn key="description">Description</TableColumn>
-                            <TableColumn key="actions">Actions</TableColumn>
-                          </TableHeader>
-                          <TableBody items={sortedCapitalChanges}>
-                            {(item) => (
-                              <TableRow key={item.id}>
-                                <TableCell>{new Date(item.date).toLocaleDateString()}</TableCell>
-                                <TableCell>
-                                  <Chip color={item.type === 'deposit' ? 'success' : 'danger'} size="sm">
-                                    {item.type === 'deposit' ? 'Deposit' : 'Withdrawal'}
-                                  </Chip>
-                                </TableCell>
-                                <TableCell>{new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(item.amount)}</TableCell>
-                                <TableCell>{item.description}</TableCell>
-                                <TableCell>
-                                  <div className="relative flex items-center gap-2">
-                                    <Tooltip content="Delete capital change">
-                                      <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => deleteCapitalChange(item.id)}>
-                                        <Icon icon="lucide:trash-2" className="w-4 h-4" />
-                                      </Button>
-                                    </Tooltip>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      )}
-                    </div>
-                  </div>
-                </Tab>
-                <Tab key="monthly" title="Monthly Overrides">
-                  <div className="py-4 space-y-4">
-                    <p className="text-sm text-foreground-500">
-                      Override starting capital for specific months. This allows you to manually set the starting capital for any month, overriding the automatic calculation.
-                    </p>
-
-                    {/* Add New Monthly Override */}
-                    <div className="border border-divider rounded-lg p-4 bg-default-50 dark:bg-default-100">
-                      <h4 className="font-semibold mb-3">Add Monthly Override</h4>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        <Select
-                          label="Month"
-                          selectedKeys={[overrideMonth]}
-                          onSelectionChange={(keys) => setOverrideMonth(Array.from(keys)[0] as string)}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                          aria-label="Select month for override"
-                        >
-                          {months.map((month) => (
-                            <SelectItem key={month}>
-                              {month}
-                            </SelectItem>
-                          ))}
-                        </Select>
-                        <Select
-                          label="Year"
-                          selectedKeys={[overrideYear.toString()]}
-                          onSelectionChange={(keys) => setOverrideYear(parseInt(Array.from(keys)[0] as string))}
-                          className="w-full"
-                          size="sm"
-                          variant="bordered"
-                          aria-label="Select year for override"
-                        >
-                          {years.map((year) => (
-                            <SelectItem key={year}>
-                              {year}
-                            </SelectItem>
-                          ))}
-                        </Select>
-                        <Input
-                          label="Starting Capital"
-                          type="number"
-                          value={overrideAmount}
-                          onValueChange={setOverrideAmount}
-                          min="0"
-                          step="1000"
-                          startContent={<span className="text-default-400">₹</span>}
-                        />
-                        <div className="sm:col-span-2 lg:col-span-3">
-                          <Button
-                            color="primary"
-                            onPress={handleAddMonthlyOverride}
-                            isDisabled={!overrideAmount}
-                            startContent={<Icon icon="lucide:calendar-plus" />}
-                          >
-                            Set Monthly Override
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Existing Monthly Overrides */}
-                    <div>
-                      <h4 className="font-semibold mb-3">Monthly Overrides</h4>
-                      {sortedMonthlyOverrides.length === 0 ? (
-                        <div className="text-center py-8 text-default-500">
-                          <Icon icon="lucide:calendar-check" className="text-4xl mb-2 mx-auto" />
-                          <p>No monthly overrides set yet.</p>
-                          <p className="text-sm">Add an override above to manually set starting capital for specific months.</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {sortedMonthlyOverrides.map((override) => (
-                            <div key={override.id} className="flex items-center gap-3 p-3 border border-divider rounded-lg">
-                              <div className="flex-shrink-0">
-                                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary-100 text-primary-600 dark:bg-primary-900 dark:text-primary-300">
-                                  <Icon icon="lucide:calendar" className="w-5 h-5" />
-                                </div>
-                              </div>
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{override.month} {override.year}</span>
-                                  <span className="text-sm px-2 py-1 rounded-full bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
-                                    Override
-                                  </span>
-                                </div>
-                                <div className="text-sm text-default-500 mt-1">
-                                  Updated: {new Date(override.updatedAt).toLocaleDateString()}
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="font-bold text-lg text-primary">
-                                  ₹{override.startingCapital.toLocaleString()}
-                                </div>
-                                <div className="flex gap-1 mt-1">
-                                  <Button
-                                    size="sm"
-                                    variant="flat"
-                                    color="danger"
-                                    onPress={() => handleRemoveMonthlyOverride(override.month, override.year)}
-                                    startContent={<Icon icon="lucide:trash" className="w-3 h-3" />}
-                                  >
-                                    Remove
-                                  </Button>
-                                </div>
-                              </div>
+                          {/* Add New Capital Change */}
+                          <div className="border border-divider/50 rounded-lg p-3 bg-background/50">
+                            <h4 className="font-medium text-sm mb-3 flex items-center gap-2">
+                              <Icon icon="lucide:plus-circle" className="w-4 h-4 text-primary" />
+                              Add Capital Change
+                            </h4>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <Select
+                                label="Month"
+                                selectedKeys={[selectedMonth]}
+                                onSelectionChange={(keys) => setSelectedMonth(Array.from(keys)[0] as string)}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                                aria-label="Select month for capital change"
+                              >
+                                {months.map((month) => (
+                                  <SelectItem key={month}>
+                                    {month}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Year"
+                                selectedKeys={[selectedYear.toString()]}
+                                onSelectionChange={(keys) => setSelectedYear(parseInt(Array.from(keys)[0] as string))}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                                aria-label="Select year for capital change"
+                              >
+                                {years.map((year) => (
+                                  <SelectItem key={year}>
+                                    {year}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Capital Type"
+                                selectedKeys={[newCapitalType]}
+                                onSelectionChange={(keys) => setNewCapitalType(Array.from(keys)[0] as 'deposit' | 'withdrawal')}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                                aria-label="Select capital change type"
+                              >
+                                <SelectItem key="deposit">Deposit</SelectItem>
+                                <SelectItem key="withdrawal">Withdrawal</SelectItem>
+                              </Select>
+                              <Input
+                                label="Description (optional)"
+                                placeholder="e.g., Q1 bonus, new investment"
+                                value={newCapitalDescription}
+                                onValueChange={setNewCapitalDescription}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                              />
+                              <Input
+                                label="Amount"
+                                placeholder="e.g., 100000"
+                                value={newCapitalAmount}
+                                onValueChange={setNewCapitalAmount}
+                                type="number"
+                                min="0"
+                                step="1000"
+                                startContent={<span className="text-default-400 text-lg">₹</span>}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                              />
+                              <Button
+                                color="primary"
+                                onPress={handleAddCapitalChange}
+                                isDisabled={isNaN(parseFloat(newCapitalAmount)) || parseFloat(newCapitalAmount) <= 0}
+                                startContent={<Icon icon="lucide:plus" />}
+                                className="w-full"
+                                size="sm"
+                              >
+                                Add Capital Change
+                              </Button>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </Tab>
-                <Tab key="milestones" title="Milestones">
-                  <div className="py-3 space-y-3">
-                    <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
-                      Track your progress and celebrate achievements
-                    </p>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {ALL_MILESTONES.map((milestone) => {
-                        const isAchieved = achievedMilestones.some(a => a.id === milestone.id);
-                        const achievedAt = isAchieved 
-                          ? new Date(achievedMilestones.find(a => a.id === milestone.id)?.achievedAt || '').toLocaleDateString()
-                          : null;
-                        return (
-                          <div
-                            key={milestone.id}
-                            className={`p-3 border rounded-lg flex items-center gap-3 transition-colors ${isAchieved
-                              ? 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800'
-                              : 'bg-background/50 border-divider/50 hover:bg-content1/30'
-                            }`}
-                          >
-                            <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isAchieved
-                                ? 'bg-success-200 text-success-800 dark:bg-success-800 dark:text-success-200'
-                                : 'bg-default-200 text-default-600 dark:bg-default-700 dark:text-default-300'
-                              }`}
-                            >
-                              <Icon icon={milestone.icon} className="w-3 h-3" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h4 className={`font-medium text-xs ${isAchieved ? 'text-success-800 dark:text-success-200' : 'text-foreground'}`}>
-                                {milestone.name}
-                              </h4>
-                              <p className={`text-xs mt-0.5 ${isAchieved ? 'text-success-700 dark:text-success-300' : 'text-default-500'}`}>
-                                {milestone.description}
-                              </p>
-                              {isAchieved && (
-                                <p className="text-xs text-default-400 mt-1">
-                                  {achievedAt}
-                                </p>
-                              )}
-                            </div>
-                            {isAchieved && (
-                              <Icon icon="lucide:check-circle" className="w-4 h-4 text-success flex-shrink-0" />
+                            <h4 className="font-semibold text-lg mb-2">Capital Change History</h4>
+                            {sortedCapitalChanges.length === 0 ? (
+                              <div className="text-center py-8 text-default-500">
+                                <Icon icon="lucide:dollar-sign" className="text-4xl mb-2 mx-auto" />
+                                <p>No capital changes recorded yet.</p>
+                                <p className="text-sm">Add a capital change above.</p>
+                              </div>
+                            ) : (
+                              <Table
+                                aria-label="Capital Changes Table"
+                                selectionMode="single"
+                                // onRowAction={(key) => handleEditCapitalChange(key as string)}
+                                classNames={{
+                                  wrapper: "min-h-[200px]",
+                                  th: "bg-transparent border-b border-divider text-xs font-medium text-default-500 dark:text-default-300 uppercase tracking-wider",
+                                  td: "py-2.5 text-sm"
+                                }}
+                              >
+                                <TableHeader>
+                                  <TableColumn key="date" allowsSorting={true}>Date</TableColumn>
+                                  <TableColumn key="type" allowsSorting={true}>Type</TableColumn>
+                                  <TableColumn key="amount" allowsSorting={true}>Amount</TableColumn>
+                                  <TableColumn key="description">Description</TableColumn>
+                                  <TableColumn key="actions">Actions</TableColumn>
+                                </TableHeader>
+                                <TableBody items={sortedCapitalChanges}>
+                                  {(item) => (
+                                    <TableRow key={item.id}>
+                                      <TableCell>{new Date(item.date).toLocaleDateString()}</TableCell>
+                                      <TableCell>
+                                        <Chip color={item.type === 'deposit' ? 'success' : 'danger'} size="sm">
+                                          {item.type === 'deposit' ? 'Deposit' : 'Withdrawal'}
+                                        </Chip>
+                                      </TableCell>
+                                      <TableCell>{new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(item.amount)}</TableCell>
+                                      <TableCell>{item.description}</TableCell>
+                                      <TableCell>
+                                        <div className="relative flex items-center gap-2">
+                                          <Tooltip content="Delete capital change">
+                                            <Button isIconOnly size="sm" variant="light" color="danger" onPress={() => deleteCapitalChange(item.id)}>
+                                              <Icon icon="lucide:trash-2" className="w-4 h-4" />
+                                            </Button>
+                                          </Tooltip>
+                                        </div>
+                                      </TableCell>
+                                    </TableRow>
+                                  )}
+                                </TableBody>
+                              </Table>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </Tab>
+                <Tab key="monthly" title="Monthly Overrides">
+                  <AnimatePresence mode="wait">
+                    {selectedTab === "monthly" && (
+                      <motion.div
+                        key="monthly-content"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <div className="py-4 space-y-4">
+                          <p className="text-sm text-foreground-500">
+                            Override starting capital for specific months. This allows you to manually set the starting capital for any month, overriding the automatic calculation.
+                          </p>
+
+                          {/* Add New Monthly Override */}
+                          <div className="border border-divider rounded-lg p-4 bg-default-50 dark:bg-default-100">
+                            <h4 className="font-semibold mb-3">Add Monthly Override</h4>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                              <Select
+                                label="Month"
+                                selectedKeys={[overrideMonth]}
+                                onSelectionChange={(keys) => setOverrideMonth(Array.from(keys)[0] as string)}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                                aria-label="Select month for override"
+                              >
+                                {months.map((month) => (
+                                  <SelectItem key={month}>
+                                    {month}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                              <Select
+                                label="Year"
+                                selectedKeys={[overrideYear.toString()]}
+                                onSelectionChange={(keys) => setOverrideYear(parseInt(Array.from(keys)[0] as string))}
+                                className="w-full"
+                                size="sm"
+                                variant="bordered"
+                                aria-label="Select year for override"
+                              >
+                                {years.map((year) => (
+                                  <SelectItem key={year}>
+                                    {year}
+                                  </SelectItem>
+                                ))}
+                              </Select>
+                              <Input
+                                label="Starting Capital"
+                                type="number"
+                                value={overrideAmount}
+                                onValueChange={setOverrideAmount}
+                                min="0"
+                                step="1000"
+                                startContent={<span className="text-default-400">₹</span>}
+                              />
+                              <div className="sm:col-span-2 lg:col-span-3">
+                                <Button
+                                  color="primary"
+                                  onPress={handleAddMonthlyOverride}
+                                  isDisabled={!overrideAmount}
+                                  startContent={<Icon icon="lucide:calendar-plus" />}
+                                >
+                                  Set Monthly Override
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Existing Monthly Overrides */}
+                          <div>
+                            <h4 className="font-semibold mb-3">Monthly Overrides</h4>
+                            {sortedMonthlyOverrides.length === 0 ? (
+                              <div className="text-center py-8 text-default-500">
+                                <Icon icon="lucide:calendar-check" className="text-4xl mb-2 mx-auto" />
+                                <p>No monthly overrides set yet.</p>
+                                <p className="text-sm">Add an override above to manually set starting capital for specific months.</p>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                {sortedMonthlyOverrides.map((override) => (
+                                  <div key={override.id} className="flex items-center gap-3 p-3 border border-divider rounded-lg">
+                                    <div className="flex-shrink-0">
+                                      <div className="w-10 h-10 rounded-full flex items-center justify-center bg-primary-100 text-primary-600 dark:bg-primary-900 dark:text-primary-300">
+                                        <Icon icon="lucide:calendar" className="w-5 h-5" />
+                                      </div>
+                                    </div>
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium">{override.month} {override.year}</span>
+                                        <span className="text-sm px-2 py-1 rounded-full bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300">
+                                          Override
+                                        </span>
+                                      </div>
+                                      <div className="text-sm text-default-500 mt-1">
+                                        Updated: {new Date(override.updatedAt).toLocaleDateString()}
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="font-bold text-lg text-primary">
+                                        ₹{override.startingCapital.toLocaleString()}
+                                      </div>
+                                      <div className="flex gap-1 mt-1">
+                                        <Button
+                                          size="sm"
+                                          variant="flat"
+                                          color="danger"
+                                          onPress={() => handleRemoveMonthlyOverride(override.month, override.year)}
+                                          startContent={<Icon icon="lucide:trash" className="w-3 h-3" />}
+                                        >
+                                          Remove
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </Tab>
+                <Tab key="milestones" title="Milestones">
+                  <AnimatePresence mode="wait">
+                    {selectedTab === "milestones" && (
+                      <motion.div
+                        key="milestones-content"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 10 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        <div className="py-3 space-y-3">
+                          <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                            Track your progress and celebrate achievements
+                          </p>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {ALL_MILESTONES.map((milestone) => {
+                              const isAchieved = achievedMilestones.some(a => a.id === milestone.id);
+                              const achievedAt = isAchieved
+                                ? new Date(achievedMilestones.find(a => a.id === milestone.id)?.achievedAt || '').toLocaleDateString()
+                                : null;
+                              return (
+                                <div
+                                  key={milestone.id}
+                                  className={`p-3 border rounded-lg flex items-center gap-3 transition-colors ${isAchieved
+                                    ? 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800'
+                                    : 'bg-background/50 border-divider/50 hover:bg-content1/30'
+                                  }`}
+                                >
+                                  <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isAchieved
+                                      ? 'bg-success-200 text-success-800 dark:bg-success-800 dark:text-success-200'
+                                      : 'bg-default-200 text-default-600 dark:bg-default-700 dark:text-default-300'
+                                    }`}
+                                  >
+                                    <Icon icon={milestone.icon} className="w-3 h-3" />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <h4 className={`font-medium text-xs ${isAchieved ? 'text-success-800 dark:text-success-200' : 'text-foreground'}`}>
+                                      {milestone.name}
+                                    </h4>
+                                    <p className={`text-xs mt-0.5 ${isAchieved ? 'text-success-700 dark:text-success-300' : 'text-default-500'}`}>
+                                      {milestone.description}
+                                    </p>
+                                    {isAchieved && (
+                                      <p className="text-xs text-default-400 mt-1">
+                                        {achievedAt}
+                                      </p>
+                                    )}
+                                  </div>
+                                  {isAchieved && (
+                                    <Icon icon="lucide:check-circle" className="w-4 h-4 text-success flex-shrink-0" />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </Tab>
               </Tabs>
             </ModalBody>

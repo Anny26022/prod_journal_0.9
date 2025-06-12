@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useCallback, useMemo } from "react";
+import { getExitDatesWithFallback } from './accountingUtils';
 
 export interface YearlyStartingCapital {
   year: number;
@@ -65,71 +66,56 @@ const TruePortfolioContext = createContext<TruePortfolioContextType | undefined>
 
 // localStorage helpers
 function fetchYearlyStartingCapitals(): YearlyStartingCapital[] {
-  console.log('📥 Loading yearly starting capitals from localStorage...');
   try {
     const stored = localStorage.getItem('yearlyStartingCapitals');
     const capitals = stored ? JSON.parse(stored) : [];
-    console.log('✅ Yearly starting capitals loaded:', capitals);
     return capitals;
   } catch (error) {
-    console.error('❌ Error fetching yearly starting capitals:', error);
     return [];
   }
 }
 
 function saveYearlyStartingCapitals(capitals: YearlyStartingCapital[]) {
-  console.log('💾 Saving yearly starting capitals to localStorage:', capitals);
   try {
     localStorage.setItem('yearlyStartingCapitals', JSON.stringify(capitals));
-    console.log('✅ Yearly starting capitals saved successfully');
   } catch (error) {
-    console.error('❌ localStorage save error for yearly capitals:', error);
+    // Handle error silently
   }
 }
 
 function fetchCapitalChanges(): CapitalChange[] {
-  console.log('📥 Loading capital changes from localStorage...');
   try {
     const stored = localStorage.getItem('capitalChanges');
     const changes = stored ? JSON.parse(stored) : [];
-    console.log('✅ Capital changes loaded:', changes);
     return changes;
   } catch (error) {
-    console.error('❌ Error fetching capital changes:', error);
     return [];
   }
 }
 
 function saveCapitalChanges(changes: CapitalChange[]) {
-  console.log('💾 Saving capital changes to localStorage:', changes);
   try {
     localStorage.setItem('capitalChanges', JSON.stringify(changes));
-    console.log('✅ Capital changes saved successfully');
   } catch (error) {
-    console.error('❌ localStorage save error for capital changes:', error);
+    // Handle error silently
   }
 }
 
 function fetchMonthlyStartingCapitalOverrides(): MonthlyStartingCapitalOverride[] {
-  console.log('📥 Loading monthly starting capital overrides from localStorage...');
   try {
     const stored = localStorage.getItem('monthlyStartingCapitalOverrides');
     const overrides = stored ? JSON.parse(stored) : [];
-    console.log('✅ Monthly starting capital overrides loaded:', overrides);
     return overrides;
   } catch (error) {
-    console.error('❌ Error fetching monthly starting capital overrides:', error);
     return [];
   }
 }
 
 function saveMonthlyStartingCapitalOverrides(overrides: MonthlyStartingCapitalOverride[]) {
-  console.log('💾 Saving monthly starting capital overrides to localStorage:', overrides);
   try {
     localStorage.setItem('monthlyStartingCapitalOverrides', JSON.stringify(overrides));
-    console.log('✅ Monthly starting capital overrides saved successfully');
   } catch (error) {
-    console.error('❌ localStorage save error for monthly overrides:', error);
+    // Handle error silently
   }
 }
 
@@ -160,7 +146,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
           setMonthlyStartingCapitalOverrides(overrides);
         }
       } catch (error) {
-        console.error('Error loading true portfolio data:', error)
+        // Handle error silently
       } finally {
         setHydrated(true);
       }
@@ -288,6 +274,8 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   const getTradesPLForMonth = useCallback((month: string, year: number, trades: any[] = [], useCashBasis: boolean = false): number => {
     if (!trades || trades.length === 0) return 0;
 
+
+
     if (useCashBasis) {
       // Cash basis: P&L is attributed to the month when trades are exited/closed
       const result = trades
@@ -299,11 +287,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
           let monthPL = 0;
 
           // Check each exit and attribute P&L to the respective exit months
-          const exits = [
-            { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
-            { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
-            { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
-          ].filter(exit => exit.date && exit.qty > 0 && exit.price > 0);
+          const exits = getExitDatesWithFallback(trade);
 
           // Calculate P&L for exits in this specific month/year
           exits.forEach(exit => {
@@ -316,7 +300,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
             if (exitMonth === month && exitYear === year) {
               // Calculate P&L for this specific exit
               const avgEntry = trade.avgEntry || trade.entry || 0;
-              if (avgEntry > 0) {
+              if (avgEntry > 0 && exit.price > 0 && exit.qty > 0) {
                 const exitPL = trade.buySell === 'Buy'
                   ? (exit.price - avgEntry) * exit.qty
                   : (avgEntry - exit.price) * exit.qty;
@@ -405,7 +389,6 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     const monthIndex = months.indexOf(normalizedMonth);
 
     if (monthIndex === -1) {
-      console.warn(`Invalid month: ${month} (normalized: ${normalizedMonth}). Expected one of: ${months.join(', ')}`);
       throw new Error(`Invalid month: ${month}. Expected short month names like 'Jan', 'Feb', etc.`);
     }
 
@@ -521,7 +504,6 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
       const monthlyData = getMonthlyTruePortfolio(month, year, trades, useCashBasis);
       return monthlyData.finalCapital;
     } catch (error) {
-      console.warn(`Error getting true portfolio size for ${month} ${year}:`, error);
       return 100000; // Fallback value
     }
   }, [getMonthlyTruePortfolio]);
@@ -535,7 +517,6 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
 
       return getTruePortfolioSize(currentMonth, currentYear, trades, useCashBasis);
     } catch (error) {
-      console.warn('Error calculating latest true portfolio size:', error);
       return 100000; // Fallback value
     }
   }, [getTruePortfolioSize]);
@@ -550,7 +531,38 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     let minOverallDate: Date | null = null;
     let maxOverallDate: Date | null = null;
 
-    [...trades, ...capitalChanges].forEach(item => {
+    // Process trades - consider both entry and exit dates for cash basis
+    trades.forEach(trade => {
+        if (trade.date) {
+            const entryDate = new Date(trade.date);
+            if (!minOverallDate || entryDate < minOverallDate) {
+                minOverallDate = entryDate;
+            }
+            if (!maxOverallDate || entryDate > maxOverallDate) {
+                maxOverallDate = entryDate;
+            }
+        }
+
+        // For cash basis, also consider exit dates
+        if (useCashBasis && (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial')) {
+            [trade.exit1Date, trade.exit2Date, trade.exit3Date].forEach(exitDate => {
+                if (exitDate) {
+                    const exitDateObj = new Date(exitDate);
+                    if (!isNaN(exitDateObj.getTime())) {
+                        if (!minOverallDate || exitDateObj < minOverallDate) {
+                            minOverallDate = exitDateObj;
+                        }
+                        if (!maxOverallDate || exitDateObj > maxOverallDate) {
+                            maxOverallDate = exitDateObj;
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    // Process capital changes
+    capitalChanges.forEach(item => {
         if (item.date) {
             const itemDate = new Date(item.date);
             if (!minOverallDate || itemDate < minOverallDate) {
@@ -613,15 +625,25 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     try {
       return getLatestTruePortfolioSize();
     } catch (error) {
-      console.warn('Error getting portfolio size:', error);
       return 100000; // Fallback value
     }
   }, [getLatestTruePortfolioSize]);
 
+  // Create safe wrapper functions that check hydration status
+  const safeGetTruePortfolioSize = useCallback((month: string, year: number, trades?: any[], useCashBasis?: boolean) => {
+    if (!hydrated) return 100000; // Return default value during hydration
+    return getTruePortfolioSize(month, year, trades, useCashBasis);
+  }, [hydrated, getTruePortfolioSize]);
+
+  const safeGetLatestTruePortfolioSize = useCallback((trades?: any[], useCashBasis?: boolean) => {
+    if (!hydrated) return 100000; // Return default value during hydration
+    return getLatestTruePortfolioSize(trades, useCashBasis);
+  }, [hydrated, getLatestTruePortfolioSize]);
+
   // Memoize the context value to prevent unnecessary re-renders
   const contextValue = useMemo(() => ({
-    getTruePortfolioSize,
-    getLatestTruePortfolioSize,
+    getTruePortfolioSize: safeGetTruePortfolioSize,
+    getLatestTruePortfolioSize: safeGetLatestTruePortfolioSize,
     yearlyStartingCapitals,
     setYearlyStartingCapital,
     getYearlyStartingCapital,
@@ -635,10 +657,10 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     deleteCapitalChange,
     getMonthlyTruePortfolio,
     getAllMonthlyTruePortfolios,
-    portfolioSize
+    portfolioSize: hydrated ? portfolioSize : 100000
   }), [
-    getTruePortfolioSize,
-    getLatestTruePortfolioSize,
+    safeGetTruePortfolioSize,
+    safeGetLatestTruePortfolioSize,
     yearlyStartingCapitals,
     setYearlyStartingCapital,
     getYearlyStartingCapital,
@@ -652,12 +674,11 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     deleteCapitalChange,
     getMonthlyTruePortfolio,
     getAllMonthlyTruePortfolios,
-    portfolioSize
+    portfolioSize,
+    hydrated
   ]);
 
-  // Only render children after hydration
-  if (!hydrated) return null;
-
+  // Always render children to prevent hook count mismatches
   return (
     <TruePortfolioContext.Provider value={contextValue}>
       {children}

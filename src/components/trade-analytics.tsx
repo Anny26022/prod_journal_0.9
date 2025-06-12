@@ -166,9 +166,10 @@ export const TradeAnalytics = React.memo(function TradeAnalytics() {
                     exit={{ opacity: 0, x: -20 }}
                     transition={{ duration: 0.2 }}
                   >
-                    <PerformanceChart 
-                      trades={trades} 
+                    <PerformanceChart
+                      trades={trades}
                       onDataUpdate={handleChartDataUpdate}
+                      selectedView={selectedView}
                     />
                   </motion.div>
                 </AnimatePresence>

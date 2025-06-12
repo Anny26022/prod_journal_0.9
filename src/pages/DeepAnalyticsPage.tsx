@@ -13,7 +13,7 @@ import PnLDistributionCharts from '../components/analytics/PnLDistributionCharts
 import TradeHeatmap from '../components/analytics/TradeHeatmap';
 import { useGlobalFilter } from '../context/GlobalFilterContext';
 import { useAccountingMethod } from '../context/AccountingMethodContext';
-import { calculateTradePL, getTradeDateForAccounting } from '../utils/accountingUtils';
+import { calculateTradePL, getTradeDateForAccounting, getExitDatesWithFallback } from '../utils/accountingUtils';
 import {
   getUniqueSortedDates,
   calculateDailyPortfolioValues,
@@ -280,11 +280,7 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
             closedTrades.forEach(trade => {
                 if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
-                    const exits = [
-                        { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
-                        { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
-                        { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
-                    ].filter(exit => exit.date && exit.qty > 0 && exit.price > 0);
+                    const exits = getExitDatesWithFallback(trade);
 
                     exits.forEach(exit => {
                         const partialPL = calculateTradePL({
@@ -337,7 +333,7 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
         // --- Calculate Sharpe, Calmar, Sortino Ratios ---
         const allTradesForMetrics = trades; // Use all trades for portfolio value calculation
-        const dailyPortfolioValues = calculateDailyPortfolioValues(allTradesForMetrics, capitalChanges);
+        const dailyPortfolioValues = calculateDailyPortfolioValues(allTradesForMetrics, capitalChanges, useCashBasis);
         const dailyReturnsMap = calculateDailyReturns(dailyPortfolioValues);
         const dailyReturnsArray = Array.from(dailyReturnsMap.values());
 

@@ -88,7 +88,7 @@ export const GlobalFilterProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const contextValue = useMemo(() => ({
     filter,
     setFilter
-  }), [filter, setFilter]);
+  }), [filter]); // Remove setFilter from dependencies as it's stable
 
   return (
     <GlobalFilterContext.Provider value={contextValue}>

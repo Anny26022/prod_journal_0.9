@@ -7,7 +7,7 @@ import { useTruePortfolioWithTrades } from "../hooks/use-true-portfolio-with-tra
 import { calcXIRR } from "../utils/tradeCalculations";
 import { useAccountingMethod } from "../context/AccountingMethodContext";
 import { useGlobalFilter } from "../context/GlobalFilterContext";
-import { getTradesForMonth, calculateTradePL } from "../utils/accountingUtils";
+import { getTradesForMonth, calculateTradePL, getTradeDateForAccounting } from "../utils/accountingUtils";
 
 // Helper function to create safe dependencies for useEffect/useMemo
 const safeDeps = (deps: any[]) => deps;
@@ -90,9 +90,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
       const monthTrades = getTradesForMonth(filteredTrades, month, selectedYear, useCashBasis);
       if (monthTrades.length > 0) {
         // Use the first trade's date for the month date
-        const firstTradeDate = useCashBasis
-          ? new Date((monthTrades[0] as any)._cashBasisExit?.date || monthTrades[0].date)
-          : new Date(monthTrades[0].date);
+        const firstTradeDate = new Date(getTradeDateForAccounting(monthTrades[0], useCashBasis));
 
         map[month] = {
           trades: monthTrades,
@@ -101,12 +99,8 @@ export const MonthlyPerformanceTable: React.FC = () => {
 
         // Sort trades by date within each month
         map[month].trades.sort((a, b) => {
-          const dateA = useCashBasis
-            ? new Date((a as any)._cashBasisExit?.date || a.date)
-            : new Date(a.date);
-          const dateB = useCashBasis
-            ? new Date((b as any)._cashBasisExit?.date || b.date)
-            : new Date(b.date);
+          const dateA = new Date(getTradeDateForAccounting(a, useCashBasis));
+          const dateB = new Date(getTradeDateForAccounting(b, useCashBasis));
           return dateA.getTime() - dateB.getTime();
         });
       }
@@ -136,6 +130,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
     const winTrades = tradesWithPL.filter(t => t.accountingPL > 0);
     const lossTrades = tradesWithPL.filter(t => t.accountingPL < 0);
     const winPercentage = tradesCount > 0 ? (winTrades.length / tradesCount) * 100 : 0;
+
+    // For monthly performance, we want to show stockMove % (which is consistent across accounting methods)
+    // The key is that we're filtering trades correctly based on accounting method above
     const avgGain = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / winTrades.length : 0;
     const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / lossTrades.length : 0;
     
@@ -818,15 +815,20 @@ export const MonthlyPerformanceTable: React.FC = () => {
           ))}
         </select>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-default-200 dark:border-default-100">
-        <Table 
-          aria-label="Monthly performance table"
-          classNames={{
-            base: "min-w-[1200px] bg-white dark:bg-gray-900",
-            th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800",
-            td: "py-3 px-4 border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200",
-          }}
-        >
+      <div className="rounded-lg border border-default-200 dark:border-default-100 bg-white dark:bg-gray-900 overflow-hidden">
+        <div className="overflow-auto max-h-[70vh]">
+          <Table
+            aria-label="Monthly performance table"
+            classNames={{
+              base: "min-w-[1200px]",
+              wrapper: "shadow-none p-0 rounded-none",
+              table: "table-auto",
+              thead: "[&>tr]:first:shadow-none",
+              th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800 sticky top-0 z-20 backdrop-blur-sm",
+              td: "py-3 px-4 border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200",
+            }}
+            removeWrapper
+          >
           <TableHeader columns={columns}>
             {(column) => (
               <TableColumn key={column.key} className="whitespace-nowrap">
@@ -895,7 +897,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
                       </TableCell>
                     );
                   }
-                  
+
                   if (columnKey === 'month') {
                     return (
                       <TableCell key={`${item.month}-${String(columnKey)}`}>
@@ -1102,7 +1104,8 @@ export const MonthlyPerformanceTable: React.FC = () => {
               </TableRow>
             )}
           </TableBody>
-        </Table>
+          </Table>
+        </div>
       </div>
     </div>
   );

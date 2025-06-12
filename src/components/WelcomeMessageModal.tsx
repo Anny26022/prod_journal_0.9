@@ -86,7 +86,7 @@ export const WelcomeMessageModal: React.FC<WelcomeMessageModalProps> = ({ isOpen
             </div>
           </motion.div>
         </ModalHeader>
-        <ModalBody className="px-6 py-4 space-y-3">
+        <ModalBody className="px-4 py-3 space-y-2">
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -106,7 +106,7 @@ export const WelcomeMessageModal: React.FC<WelcomeMessageModalProps> = ({ isOpen
             </p>
           </motion.div>
         </ModalBody>
-        <ModalFooter className="border-t border-divider/50 px-6 py-4 bg-gradient-to-r from-background/50 to-content1/30">
+        <ModalFooter className="border-t border-divider/50 px-4 py-3 bg-gradient-to-r from-background/50 to-content1/30">
           <motion.div
             className="w-full"
             initial={{ opacity: 0, y: 10 }}

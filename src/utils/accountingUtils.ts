@@ -1,6 +1,52 @@
 import { Trade } from '../types/trade';
 
 /**
+ * Helper function to get exit dates with fallback logic
+ * @param trade - The trade object
+ * @returns Array of exit objects with date, qty, and price
+ */
+export function getExitDatesWithFallback(trade: Trade): Array<{ date: string; qty: number; price: number }> {
+  // First, try to get individual exit dates
+  const exits = [
+    { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
+    { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
+    { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
+  ].filter(exit => exit.date && exit.date.trim() !== '' && exit.qty > 0);
+
+
+
+  // If we have individual exit data, return it
+  if (exits.length > 0) {
+    return exits;
+  }
+
+  // Fallback: If no individual exit dates but we have exitedQty and avgExitPrice
+  // Create a synthetic exit using the trade date as fallback
+  if ((trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') &&
+      trade.exitedQty > 0 && trade.avgExitPrice > 0) {
+
+    // Try to find the latest exit date from available exits (even if qty/price is 0)
+    const availableExitDates = [
+      trade.exit1Date,
+      trade.exit2Date,
+      trade.exit3Date
+    ].filter(date => date && date.trim() !== '');
+
+    const fallbackDate = availableExitDates.length > 0
+      ? availableExitDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
+      : trade.date; // Ultimate fallback to trade entry date
+
+    return [{
+      date: fallbackDate,
+      qty: trade.exitedQty,
+      price: trade.avgExitPrice
+    }];
+  }
+
+  return [];
+}
+
+/**
  * Groups trades by month based on the accounting method
  * @param trades - Array of trades
  * @param useCashBasis - Whether to use cash basis (true) or accrual basis (false)
@@ -13,20 +59,16 @@ export function groupTradesByMonth(trades: Trade[], useCashBasis: boolean = fals
     if (useCashBasis) {
       // Cash basis: Group by exit dates
       if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
-        const exits = [
-          { date: trade.exit1Date, qty: trade.exit1Qty || 0 },
-          { date: trade.exit2Date, qty: trade.exit2Qty || 0 },
-          { date: trade.exit3Date, qty: trade.exit3Qty || 0 }
-        ].filter(exit => exit.date && exit.qty > 0);
+        const exits = getExitDatesWithFallback(trade);
 
         exits.forEach(exit => {
           const exitDate = new Date(exit.date);
           const monthKey = `${exitDate.toLocaleString('default', { month: 'short' })} ${exitDate.getFullYear()}`;
-          
+
           if (!groupedTrades[monthKey]) {
             groupedTrades[monthKey] = [];
           }
-          
+
           // Create a partial trade object for this exit
           const partialTrade: Trade = {
             ...trade,
@@ -34,10 +76,10 @@ export function groupTradesByMonth(trades: Trade[], useCashBasis: boolean = fals
             _cashBasisExit: {
               date: exit.date,
               qty: exit.qty,
-              price: 0 // Will be determined in calculateTradePL
+              price: exit.price
             }
           };
-          
+
           groupedTrades[monthKey].push(partialTrade);
         });
       }
@@ -75,15 +117,8 @@ export function calculateTradePL(trade: Trade, useCashBasis: boolean = false): n
     if (cashBasisExit) {
       const avgEntry = trade.avgEntry || trade.entry || 0;
 
-      // Find the correct exit price for this specific exit
-      let correctExitPrice = 0;
-      if (trade.exit1Date === cashBasisExit.date && trade.exit1Qty === cashBasisExit.qty) {
-        correctExitPrice = trade.exit1Price || 0;
-      } else if (trade.exit2Date === cashBasisExit.date && trade.exit2Qty === cashBasisExit.qty) {
-        correctExitPrice = trade.exit2Price || 0;
-      } else if (trade.exit3Date === cashBasisExit.date && trade.exit3Qty === cashBasisExit.qty) {
-        correctExitPrice = trade.exit3Price || 0;
-      }
+      // Use the exit price from the cash basis exit data
+      const correctExitPrice = cashBasisExit.price;
 
       if (avgEntry > 0 && correctExitPrice > 0) {
         const pl = trade.buySell === 'Buy'
@@ -123,6 +158,23 @@ export function calculateTradePL(trade: Trade, useCashBasis: boolean = false): n
           totalRealizedPL += pl;
         }
 
+        // Fallback: If no individual exit data but we have partial exit information
+        // Use the aggregate partial exit data (exitedQty, avgExitPrice, plRs)
+        if (totalRealizedPL === 0 && trade.exitedQty > 0) {
+          // Option 1: Use stored plRs if available (most reliable)
+          if (trade.plRs !== undefined && trade.plRs !== null) {
+            return trade.plRs;
+          }
+
+          // Option 2: Calculate from aggregate exit data if avgExitPrice is available
+          if (trade.avgExitPrice > 0 && avgEntry > 0) {
+            const pl = trade.buySell === 'Buy'
+              ? (trade.avgExitPrice - avgEntry) * trade.exitedQty
+              : (avgEntry - trade.avgExitPrice) * trade.exitedQty;
+            return pl;
+          }
+        }
+
         return totalRealizedPL;
       }
     }
@@ -147,8 +199,24 @@ export function getTradeDateForAccounting(trade: Trade, useCashBasis: boolean = 
     if (cashBasisExit) {
       return cashBasisExit.date;
     }
-    
-    // Fallback to trade date if no cash basis exit
+
+    // For cash basis without _cashBasisExit, try to find the most recent exit date
+    if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+      // Find the latest exit date from available exits
+      const exitDates = [
+        trade.exit1Date,
+        trade.exit2Date,
+        trade.exit3Date
+      ].filter(date => date && date.trim() !== '');
+
+      if (exitDates.length > 0) {
+        // Return the latest exit date for cash basis
+        const latestExitDate = exitDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+        return latestExitDate;
+      }
+    }
+
+    // Fallback to trade date if no exit information available
     return trade.date;
   }
 }
@@ -177,17 +245,13 @@ export function getTradesForMonth(trades: Trade[], month: string, year: number, 
     
     trades.forEach(trade => {
       if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
-        const exits = [
-          { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
-          { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
-          { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
-        ].filter(exit => exit.date && exit.qty > 0 && exit.price > 0);
+        const exits = getExitDatesWithFallback(trade);
 
         exits.forEach(exit => {
           const exitDate = new Date(exit.date);
           const exitMonth = exitDate.toLocaleString('default', { month: 'short' });
           const exitYear = exitDate.getFullYear();
-          
+
           if (exitMonth === month && exitYear === year) {
             // Create a partial trade object for this exit
             const partialTrade: Trade = {
@@ -198,7 +262,7 @@ export function getTradesForMonth(trades: Trade[], month: string, year: number, 
                 price: exit.price
               }
             };
-            
+
             monthTrades.push(partialTrade);
           }
         });

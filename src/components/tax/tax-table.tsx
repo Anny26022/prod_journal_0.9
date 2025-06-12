@@ -529,15 +529,20 @@ export const TaxTable: React.FC<TaxTableProps> = ({ trades = [], taxesByMonth, s
   }, [editingCell, taxesByMonth, formatCurrency, handleEditComplete, handleEditStart]);
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-default-200 dark:border-default-100">
-    <Table 
-        aria-label="Monthly Tax Breakdown Table"
-      classNames={{
-          base: "min-w-[800px] bg-white dark:bg-gray-900",
-          th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800",
-          td: "py-3 px-4 border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200",
-        }}
-      >
+    <div className="rounded-lg border border-default-200 dark:border-default-100 bg-white dark:bg-gray-900 overflow-hidden">
+      <div className="overflow-auto max-h-[70vh]">
+        <Table
+          aria-label="Monthly Tax Breakdown Table"
+          classNames={{
+            base: "min-w-[800px]",
+            wrapper: "shadow-none p-0 rounded-none",
+            table: "table-auto",
+            thead: "[&>tr]:first:shadow-none",
+            th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800 sticky top-0 z-20 backdrop-blur-sm",
+            td: "py-3 px-4 border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200",
+          }}
+          removeWrapper
+        >
         <TableHeader columns={columns}>
           {(column) => (
             <TableColumn key={column.key} className="whitespace-nowrap">
@@ -597,8 +602,9 @@ export const TaxTable: React.FC<TaxTableProps> = ({ trades = [], taxesByMonth, s
               {(columnKey) => renderCell(item, columnKey as string)}
           </TableRow>
           )}
-      </TableBody>
-    </Table>
+        </TableBody>
+        </Table>
+      </div>
     </div>
   );
 };

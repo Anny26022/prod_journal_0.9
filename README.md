@@ -1,159 +1,335 @@
-# React + Tailwind
+# 📈 Advanced Trading Journal & Portfolio Analytics Platform
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules. One top of the standard Vite setup, [tailwindcss](https://tailwindcss.com/) is installed and ready to be used in React components.
+[![React](https://img.shields.io/badge/React-18.3.1-blue.svg)](https://reactjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7.3-blue.svg)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6.0.11-646CFF.svg)](https://vitejs.dev/)
+[![HeroUI](https://img.shields.io/badge/HeroUI-2.7.8-purple.svg)](https://heroui.com/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Additional references:
+> **A comprehensive, feature-rich trading journal and portfolio analytics platform built with modern React, TypeScript, and advanced financial calculations. Designed for serious traders who demand precision, flexibility, and deep insights into their trading performance.**
 
-- [Getting started with Vite](https://vitejs.dev/guide/)
-- [Tailwind documentation](https://tailwindcss.com/docs/installation)
+## 🌟 **Key Highlights**
 
-# True Portfolio Tracker
+- **🎯 Dual Accounting Methods**: Support for both Cash Basis and Accrual Basis accounting
+- **📊 Advanced Analytics**: Deep performance metrics, risk analysis, and portfolio insights
+- **🔄 Real-time Calculations**: Live P/L tracking, position sizing, and risk metrics
+- **📱 Responsive Design**: Optimized for desktop, tablet, and mobile devices
+- **🎨 Modern UI/UX**: Sleek, intuitive interface with smooth animations
+- **💾 Local Storage**: No external dependencies - all data stored locally
+- **🔧 Highly Customizable**: Flexible configuration and personalization options
 
-A powerful and intuitive web-based application designed to help traders meticulously track their trades, analyze their performance, and manage their portfolio with a "True Portfolio System" approach. This system goes beyond simple trade tracking by integrating starting capital, deposits, withdrawals, and trading P&L to provide a comprehensive view of your actual portfolio growth over time.
+---
 
-## ✨ Features
-
-### 📈 Comprehensive Trade Journal
-- **Add, Edit, Delete Trades**: Easily manage your trading records with full CRUD (Create, Read, Update, Delete) functionality.
-- **Search & Filter**: Quickly find specific trades using a search bar and filter by position status (Open, Closed, Partial).
-- **Customizable Columns**: Choose which data columns are visible in your trade table for a personalized view.
-- **Inline Editing**: Directly edit various trade fields within the table for quick adjustments (e.g., Entry Price, Stop Loss, Quantity, Dates).
-- **Intelligent Auto-Calculations**:
-    - **Position Size**: Automatically calculated based on your trade details.
-    - **Unrealized P/L**: Track your current profit/loss for open positions in real-time.
-    - **Realized P/L**: See your final profit/loss for closed trades.
-    - **Holding Days**: Calculate the duration of your trades.
-    - **Open Heat**: Understand the potential portfolio impact if all open positions hit their initial stop-loss/trailing stop-loss.
-    - **Reward:Risk (R:R)**: Calculated per trade, with a detailed breakdown for pyramid entries.
-    - **Stock Move**: Analyze individual stock price movements relative to your entries.
-- **Dynamic CMP Updates**: For open positions, current market prices (CMP) are automatically fetched and updated every 15 seconds to provide accurate unrealized P/L.
-- **Flexible Dropdowns**: Easily add and manage custom options for "Exit Trigger", "Proficiency Growth Areas", and "Setup Type" dropdowns, with the ability to delete predefined and custom options.
-- **Data Export**: Export your trade data to CSV or XLSX (Excel) format for external analysis or record-keeping.
-
-### 💰 True Portfolio System
-- **Yearly Starting Capital**: Set your initial capital for January of each year, forming the base for all portfolio calculations.
-- **Monthly Capital Overrides**: Manually adjust starting capital for specific months, overriding automatic calculations for greater flexibility.
-- **Capital Changes Tracking**: Record all your deposits and withdrawals to accurately reflect capital inflows and outflows.
-- **Dynamic Portfolio Sizing**: Your portfolio size is dynamically calculated based on starting capital, capital changes, and your trading P&L, offering a realistic view of your wealth.
-- **Portfolio Performance Chart**: Visualize your portfolio's growth over time, with integrated display of deposits and withdrawals, and a dynamic starting point based on your first trade's month. Tooltips show starting capital and percentage P/L change.
-
-### ⚙️ User Settings & Experience
-- **Profile Settings Modal**: A centralized hub to manage:
-    - Your name.
-    - Yearly starting capital.
-    - Monthly capital overrides.
-    - Capital changes history.
-- **Personalized Welcome Message**: Greeted with a custom welcome message on first startup, prompting for your name.
-- **Full-Width Layout Option**: Choose between a fixed-width or full-width layout for the entire application, accessible through the Profile Settings.
-- **Persistent Settings**: Your preferences, including your name and layout choice, are saved to local storage for a consistent experience.
-
-## 📄 Pages Overview
-
-### 📝 Trade Journal
-This is the core of the application where you manage all your trading activities. It provides a detailed table view of your trades with extensive inline editing capabilities and real-time calculations. Key features include:
-- **Trade Management**: Add new trades, edit existing ones, and delete records.
-- **Real-time Metrics**: View unrealized P/L, holding days, and open heat for active positions.
-- **Customizable Data**: Toggle visibility of various columns to focus on the most relevant data.
-- **Smart Fields**: Auto-calculated fields like Position Size, Reward:Risk, and Stock Move provide immediate insights.
-- **Dynamic Updates**: Current Market Prices (CMP) for open positions are fetched periodically.
-- **Flexible Dropdowns**: Manage custom options for Exit Trigger, Proficiency Growth Areas, and Setup Type.
-- **Export**: Export your journal data to CSV or Excel.
-
-### 📊 Trade Analytics (Overview)
-This page provides a high-level overview of your trading performance through various metrics and charts. It helps you quickly grasp your overall progress and key performance indicators.
-- **Portfolio Performance Chart**: Visualizes your portfolio's equity curve over time, incorporating starting capital, deposits, withdrawals, and trading P&L. Includes tooltips for detailed insights.
-- **Overall Stats**: Displays quick summaries of essential metrics like total trades, win rate, average P/L per trade, etc.
-
-### 📈 Tax Analytics
-Simplify your tax reporting with automated calculations of realized and unrealized gains. This section provides a clear overview of your tax liabilities.
-- **Capital Gains Summary**: Calculates short-term and long-term capital gains based on your trade data.
-- **Realized/Unrealized Breakdown**: Differentiates between profits/losses from closed and open positions for accurate tax assessment.
-- **Export for Tax Filing**: Generates reports in a format suitable for tax preparation or submission.
-
-### 🗓️ Monthly Performance
-This page offers a monthly breakdown of your trading results, allowing you to track consistency and identify trends over specific periods.
-- **Monthly P&L**: View your profit and loss figures for each month.
-- **Win Rate by Month**: Track your success rate on a monthly basis.
-- **Other Monthly Metrics**: See detailed statistics for each month, helping you assess your performance trends.
-
-### 🧠 Deep Analytics
-Go beyond the surface with in-depth analysis of your trades based on specific criteria. This section helps you pinpoint what truly drives your performance.
-- **Industry & Sector Analysis**: Understand which industries and sectors you perform best in, with charts and breakdowns of trades.
-- **Setup Analysis**: Evaluate the profitability and success rate of different trading setups you employ.
-- **Position Analysis**: Gain insights into your capital allocation and open positions.
-- **Interactive Visualizations**: Utilize dynamic charts and tables to explore your data in detail.
-
-### ⚙️ Profile Settings
-This modal provides a centralized place to configure your application preferences and manage core financial data. You can:
-- **Update Personal Information**: Set your name for a personalized experience.
-- **Manage Yearly Starting Capital**: Define your foundational capital for each trading year.
-- **Override Monthly Capital**: Manually adjust starting capital for specific months to account for unusual circumstances or manual adjustments.
-- **Track Capital Changes**: Log all your deposits and withdrawals to keep your portfolio calculations accurate and reflect real-world capital movements.
-- **Display Preferences**: Toggle the full-width layout option for the main application content, adjusting the overall presentation of the app.
-
-## 🚀 Getting Started
-
-To get a local copy up and running, follow these simple steps.
+## 🚀 **Quick Start**
 
 ### Prerequisites
-
-- Node.js (v18 or higher recommended)
-- npm or yarn
+- **Node.js** 18.0+ 
+- **npm** or **yarn** package manager
 
 ### Installation
 
-1.  Clone the repo
-    ```bash
-    git clone https://github.com/your-username/true-portfolio-tracker.git
-    ```
-2.  Navigate to the project directory
-    ```bash
-    cd true-portfolio-tracker
-    ```
-3.  Install NPM packages
-   ```bash
-   npm install
-   # or
-    yarn install
-   ```
-4.  Start the development server
-   ```bash
-   npm run dev
-   # or
-    yarn dev
-    ```
-    The application should now be running at `http://localhost:5173` (or another port if 5173 is in use).
+```bash
+# Clone the repository
+git clone https://github.com/your-username/trading-journal-dashboard.git
+cd trading-journal-dashboard
 
-## 🛠️ Technologies Used
+# Install dependencies
+npm install
 
--   **Frontend**: React.js
--   **Styling**: Tailwind CSS
--   **UI Components**: Hero UI
--   **Charting**: Recharts (or similar, confirm in code)
--   **Icons**: Iconify (Lucide icons)
--   **Date Management**: date-fns
--   **CSV Parsing**: PapaParse
--   **Excel Export**: SheetJS (xlsx)
--   **Routing**: React Router DOM
--   **Animation**: Framer Motion
--   **State Management**: React Context API, `useState`, `useCallback`, `useMemo` hooks
--   **Local Storage**: For data persistence (no external database required)
+# Start development server
+npm run dev
 
-## 🤝 Contributing
+# Build for production
+npm run build
+```
 
-Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+### First Launch
+1. Open your browser to `http://localhost:5173`
+2. Complete the initial portfolio setup
+3. Configure your accounting method preference
+4. Start adding your trades!
 
-1.  Fork the Project
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a Pull Request
+---
 
-## 📄 License
+## 🎯 **Core Features**
 
-Distributed under the MIT License. See `LICENSE` for more information.
+### 📝 **Trade Journal Management**
+- **Comprehensive Trade Tracking**: Record entry/exit prices, quantities, dates, and strategies
+- **Multi-Level Position Building**: Support for pyramid entries (up to 2 levels) and partial exits (up to 3 levels)
+- **Real-time Calculations**: Auto-calculated metrics including position size, allocation, reward:risk ratios
+- **Inline Editing**: Quick edit capabilities directly in the trade table
+- **Advanced Filtering**: Filter by status, date ranges, symbols, and custom criteria
+- **Bulk Operations**: Import/export trades via CSV/Excel formats
 
-## 📧 Contact
+### 📊 **Advanced Analytics Dashboard**
+- **Performance Metrics**: Sharpe ratio, Sortino ratio, Calmar ratio, and custom risk metrics
+- **Portfolio Analytics**: True portfolio tracking with capital changes and monthly performance
+- **Trade Statistics**: Win rate, average win/loss, consecutive wins/losses, and more
+- **Sector Analysis**: Performance breakdown by industry sectors
+- **Risk Management**: Drawdown analysis, position sizing insights, and risk exposure metrics
 
-Your Name - your_email@example.com
-Project Link: [https://github.com/your-username/true-portfolio-tracker](https://github.com/your-username/true-portfolio-tracker)
+### 💰 **Dual Accounting System**
+- **Cash Basis Accounting**: P/L attributed to exit dates (when trades are closed)
+- **Accrual Basis Accounting**: P/L attributed to entry dates (when trades are initiated)
+- **Real-time Switching**: Toggle between methods with instant recalculation
+- **Consistent Application**: All analytics, charts, and reports respect the selected method
+
+### 📈 **Portfolio Management**
+- **True Portfolio Tracking**: Accurate portfolio size calculation with deposits/withdrawals
+- **Capital Changes Management**: Track deposits, withdrawals, and their impact
+- **Monthly Performance**: Detailed month-by-month portfolio performance analysis
+- **Historical Tracking**: Maintain complete history of portfolio changes and performance
+
+### 🎖️ **Achievement System**
+- **Trading Milestones**: Unlock achievements based on trading performance and consistency
+- **Progress Tracking**: Visual progress indicators for various trading goals
+- **Gamification**: Motivational elements to encourage consistent trading discipline
+
+---
+
+## 🛠️ **Technology Stack**
+
+### **Frontend Framework**
+- **React 18.3.1** - Modern React with hooks and concurrent features
+- **TypeScript 5.7.3** - Type-safe development with advanced type checking
+- **Vite 6.0.11** - Lightning-fast build tool and development server
+
+### **UI/UX Libraries**
+- **HeroUI 2.7.8** - Modern, accessible component library
+- **Framer Motion 11.18.2** - Smooth animations and transitions
+- **Iconify React** - Comprehensive icon library
+- **Tailwind CSS 3.4.17** - Utility-first CSS framework
+
+### **Data Visualization**
+- **Recharts 2.15.3** - Responsive charts and graphs
+- **Nivo Charts 0.99.0** - Advanced data visualization components
+- **React Calendar Heatmap** - Trading activity heatmaps
+
+### **Data Management**
+- **React Router DOM 5.3.4** - Client-side routing
+- **Date-fns 4.1.0** - Modern date utility library
+- **PapaParse 5.5.3** - CSV parsing and generation
+- **XLSX 0.18.5** - Excel file handling
+
+---
+
+## 📁 **Project Structure**
+
+```
+src/
+├── components/           # Reusable UI components
+│   ├── analytics/       # Analytics-specific components
+│   ├── dashboard/       # Dashboard widgets
+│   ├── tax/            # Tax analytics components
+│   ├── trade-table/    # Trade table components
+│   └── icons/          # Custom icon components
+├── context/             # React context providers
+│   ├── AccountingMethodContext.tsx
+│   └── GlobalFilterContext.tsx
+├── hooks/               # Custom React hooks
+│   ├── use-trades.ts
+│   ├── use-milestones.ts
+│   └── use-capital-changes.ts
+├── pages/               # Page components
+│   ├── DeepAnalyticsPage.tsx
+│   └── monthly-performance.tsx
+├── types/               # TypeScript type definitions
+├── utils/               # Utility functions and helpers
+│   ├── tradeCalculations.ts
+│   ├── accountingUtils.ts
+│   └── TruePortfolioContext.tsx
+└── data/                # Mock data and constants
+```
+
+---
+
+## ⚙️ **Configuration & Customization**
+
+### **Accounting Method Setup**
+Configure your preferred accounting method in the Profile Settings:
+- **Cash Basis**: P/L appears on exit dates (recommended for tax reporting)
+- **Accrual Basis**: P/L appears on entry dates (recommended for performance analysis)
+
+### **Portfolio Configuration**
+Set up your portfolio parameters:
+- Initial starting capital
+- Monthly capital overrides
+- Deposit and withdrawal tracking
+- Currency and formatting preferences
+
+### **Dashboard Customization**
+Personalize your dashboard:
+- Toggle widget visibility
+- Customize date ranges
+- Configure performance metrics
+- Set up custom filters
+
+---
+
+## 📊 **Key Metrics & Calculations**
+
+### **Performance Metrics**
+- **Sharpe Ratio**: Risk-adjusted returns calculation
+- **Sortino Ratio**: Downside deviation-based risk metric
+- **Calmar Ratio**: Return vs maximum drawdown
+- **Win Rate**: Percentage of profitable trades
+- **Profit Factor**: Gross profit vs gross loss ratio
+
+### **Risk Metrics**
+- **Maximum Drawdown**: Largest peak-to-trough decline
+- **Value at Risk (VaR)**: Potential loss estimation
+- **Position Sizing**: Kelly criterion and fixed percentage methods
+- **Risk-Reward Ratios**: Expected vs actual R-multiples
+
+### **Portfolio Metrics**
+- **True Portfolio Size**: Accurate portfolio value with capital changes
+- **Monthly Returns**: Period-over-period performance
+- **Cumulative Returns**: Total portfolio growth
+- **Allocation Analysis**: Position sizing and diversification metrics
+
+---
+
+## 🔧 **Advanced Features**
+
+### **Data Import/Export**
+- **CSV Import**: Bulk import trades from CSV files
+- **Excel Export**: Export filtered data to Excel format
+- **Backup/Restore**: Complete data backup and restoration
+- **Template Downloads**: Pre-formatted import templates
+
+### **Real-time Price Integration**
+- **Live Price Updates**: Automatic CMP (Current Market Price) updates
+- **Price History**: Historical price data integration
+- **Market Data API**: Configurable price data sources
+
+### **Filtering & Search**
+- **Global Date Filters**: Application-wide date range filtering
+- **Advanced Search**: Multi-criteria search and filtering
+- **Custom Views**: Save and restore custom filter configurations
+- **Quick Filters**: One-click common filter presets
+
+---
+
+## 🎨 **UI/UX Features**
+
+### **Responsive Design**
+- **Mobile Optimized**: Full functionality on mobile devices
+- **Tablet Support**: Optimized layouts for tablet screens
+- **Desktop Experience**: Rich desktop interface with advanced features
+
+### **Accessibility**
+- **Keyboard Navigation**: Full keyboard accessibility
+- **Screen Reader Support**: ARIA labels and semantic HTML
+- **High Contrast**: Support for high contrast themes
+- **Font Scaling**: Responsive typography and scaling
+
+### **Theming**
+- **Dark/Light Mode**: Automatic and manual theme switching
+- **Custom Themes**: Configurable color schemes
+- **Animation Controls**: Customizable animation preferences
+
+---
+
+## 🚀 **Performance Optimizations**
+
+### **Rendering Optimizations**
+- **React.memo**: Optimized component re-rendering
+- **useMemo/useCallback**: Memoized calculations and functions
+- **Virtual Scrolling**: Efficient handling of large datasets
+- **Lazy Loading**: On-demand component loading
+
+### **Data Management**
+- **Local Storage**: Efficient client-side data persistence
+- **Debounced Updates**: Optimized user input handling
+- **Batch Operations**: Efficient bulk data operations
+- **Memory Management**: Optimized memory usage patterns
+
+---
+
+## 📈 **Analytics Capabilities**
+
+### **Trade Analysis**
+- **Performance Attribution**: Identify top-performing strategies
+- **Sector Analysis**: Performance breakdown by industry
+- **Time-based Analysis**: Performance by time periods
+- **Strategy Effectiveness**: Compare different trading approaches
+
+### **Risk Analysis**
+- **Drawdown Analysis**: Detailed drawdown periods and recovery
+- **Correlation Analysis**: Position correlation and diversification
+- **Volatility Metrics**: Risk-adjusted performance measures
+- **Stress Testing**: Portfolio performance under various scenarios
+
+### **Reporting**
+- **Monthly Reports**: Comprehensive monthly performance summaries
+- **Tax Reports**: Tax-optimized reporting with accounting method support
+- **Custom Reports**: Configurable report generation
+- **Export Options**: Multiple export formats for external analysis
+
+---
+
+## 🔒 **Data Privacy & Security**
+
+### **Local Storage**
+- **No External Dependencies**: All data stored locally in your browser
+- **Privacy First**: No data transmitted to external servers
+- **User Control**: Complete control over your trading data
+- **Backup Options**: Manual backup and restore capabilities
+
+### **Data Integrity**
+- **Validation**: Comprehensive data validation and error checking
+- **Consistency**: Automatic data consistency maintenance
+- **Recovery**: Built-in data recovery mechanisms
+- **Versioning**: Data format versioning for future compatibility
+
+---
+
+## 🤝 **Contributing**
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+
+### **Development Setup**
+```bash
+# Fork and clone the repository
+git clone https://github.com/your-username/trading-journal-dashboard.git
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Run tests
+npm test
+
+# Build for production
+npm run build
+```
+
+---
+
+## 📄 **License**
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 **Acknowledgments**
+
+- **HeroUI Team** - For the excellent component library
+- **React Team** - For the amazing React framework
+- **TypeScript Team** - For type-safe development
+- **Vite Team** - For the lightning-fast build tool
+- **Trading Community** - For feedback and feature requests
+
+---
+
+## 📞 **Support & Contact**
+
+- **Documentation**: [Technical Architecture](TECHNICAL_ARCHITECTURE.md)
+- **Issues**: [GitHub Issues](https://github.com/your-username/trading-journal-dashboard/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/your-username/trading-journal-dashboard/discussions)
+
+---
+
+**Built with ❤️ for traders, by traders.**

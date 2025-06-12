@@ -216,7 +216,6 @@ export function calcHoldingDays(
     
     return calculateWeightedHoldingDays(tradeLegs);
   } catch (error) {
-    console.error('Error calculating holding days:', error);
     return 0;
   }
 }
@@ -238,28 +237,23 @@ export function calcCummPf(pfImpacts: number[]) {
 }
 
 export function calcOpenHeat(
-  trades: any[], 
+  trades: any[],
   portfolioSize: number, // Keep for backward compatibility or default
   getPortfolioSize?: (month: string, year: number) => number // Pass the getPortfolioSize function
 ) {
   if (!trades || trades.length === 0) {
-    console.log("[DEBUG] calcOpenHeat: No trades or empty trades array.");
     return 0;
   }
-  
-  console.log("[DEBUG] calcOpenHeat: Calculating total open heat for", trades.length, "trades.");
-  
+
   // Sum the individual Open Heat for each open/partial trade
   const totalOpenHeatValue = trades
     .filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial')
     .reduce((sum, trade) => {
       // Use the existing calcTradeOpenHeat logic which correctly uses the date-specific portfolio size
       const tradeHeat = calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize);
-      console.log("[DEBUG] calcOpenHeat: Trade", trade.name, "heat:", tradeHeat);
       return sum + tradeHeat;
     }, 0);
 
-  console.log("[DEBUG] calcOpenHeat: Total Open Heat Value before return:", totalOpenHeatValue);
   return totalOpenHeatValue;
 }
 
@@ -274,7 +268,7 @@ function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize) {
   const monthlyPortfolioSize = getPortfolioSize ? getPortfolioSize(month, year) : undefined;
   const effectivePortfolioSize = monthlyPortfolioSize !== undefined ? monthlyPortfolioSize : defaultPortfolioSize;
 
-  console.log(`[DEBUG] calcTradeOpenHeat for ${trade.name}: Month=${month}, Year=${year}, MonthlySize=${monthlyPortfolioSize}, DefaultSize=${defaultPortfolioSize}, EffectiveSize=${effectivePortfolioSize}`);
+
 
   const entryPrice = trade.avgEntry || trade.entry || 0;
   const sl = trade.sl || 0;
@@ -291,18 +285,14 @@ function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize) {
     stop = 0; // Neither entered
   }
   if (!entryPrice || !stop || !qty) {
-    console.log(`[DEBUG] calcTradeOpenHeat for ${trade.name}: Zero entry, stop, or qty. Risk=0.`);
     return 0;
   }
   if (stop >= entryPrice) {
-     console.log(`[DEBUG] calcTradeOpenHeat for ${trade.name}: Stop >= Entry. Risk=0.`);
      return 0;
   }
   const risk = (entryPrice - stop) * qty;
-  console.log(`[DEBUG] calcTradeOpenHeat for ${trade.name}: Risk=${risk}, EffectiveSize=${effectivePortfolioSize}`);
-  
+
   const heat = effectivePortfolioSize > 0 ? (Math.max(0, risk) / effectivePortfolioSize) * 100 : 0;
-  console.log(`[DEBUG] calcTradeOpenHeat for ${trade.name}: Calculated Heat=${heat}`);
   return heat;
 }
 
@@ -479,6 +469,7 @@ interface EntryMove {
  * This matches the logic in trade-journal.tsx for consistency across analytics.
  */
 import { Trade } from '../types/trade';
+import { calculateTradePL } from './accountingUtils';
 export function calcWeightedRewardRisk(trade: Trade): number {
   const entry = Number(trade.entry);
   const sl = Number(trade.sl);
@@ -579,7 +570,7 @@ export function getUniqueSortedDates(trades: any[]): Date[] {
 }
 
 // Function to calculate daily portfolio values
-export function calculateDailyPortfolioValues(trades: any[], capitalChanges: any[]): Map<number, number> {
+export function calculateDailyPortfolioValues(trades: any[], capitalChanges: any[], useCashBasis: boolean = false): Map<number, number> {
   const dailyValues = new Map<number, number>(); // Map: timestamp -> portfolio value
   const allRelevantDates = getUniqueSortedDates(trades).concat(capitalChanges.map(cc => {
     const d = new Date(cc.date);
@@ -624,16 +615,27 @@ export function calculateDailyPortfolioValues(trades: any[], capitalChanges: any
 
     // Apply P/L from closed and partially closed trades on this date
     trades.filter(trade => {
-      const exitDate = trade.exit1Date || trade.exit2Date || trade.exit3Date; // Consider any exit date
-      if (exitDate) {
+      if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+        // Use the same fallback logic as other parts of the app
+        const exitDates = [
+          trade.exit1Date,
+          trade.exit2Date,
+          trade.exit3Date
+        ].filter(date => date && date.trim() !== '');
+
+        const exitDate = exitDates.length > 0
+          ? exitDates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
+          : trade.date; // Fallback to trade date
+
         const d = new Date(exitDate);
         d.setHours(0,0,0,0);
-        return d.getTime() === timestamp && 
-               (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial');
+        return d.getTime() === timestamp;
       }
       return false;
     }).forEach(trade => {
-      currentCashComponent += trade.plRs || 0;
+      // Use accounting-aware P/L calculation instead of direct plRs
+      const accountingPL = calculateTradePL(trade, useCashBasis);
+      currentCashComponent += accountingPL;
     });
 
     // Calculate the total market value of *all open positions* on this date

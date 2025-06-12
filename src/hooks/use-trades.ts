@@ -39,12 +39,38 @@ const MISC_DATA_PREFIX = 'misc_';
 // localStorage helpers
 function getTradesFromLocalStorage(): Trade[] {
   if (typeof window === 'undefined') return []; // In a server-side environment, return empty array
-  
+
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : []; // Return empty array if no data or parsing error
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      // Validate the parsed data
+      if (Array.isArray(parsed)) {
+        return parsed;
+      } else {
+        throw new Error('Invalid data format: not an array');
+      }
+    }
+    return [];
   } catch (error) {
     console.error('Error loading trades from localStorage:', error);
+
+    // Try to recover from backup
+    try {
+      const backup = localStorage.getItem(`${STORAGE_KEY}_backup`);
+      if (backup) {
+        const parsedBackup = JSON.parse(backup);
+        if (Array.isArray(parsedBackup)) {
+          console.log('Recovered trades from backup');
+          // Restore the main storage from backup
+          localStorage.setItem(STORAGE_KEY, backup);
+          return parsedBackup;
+        }
+      }
+    } catch (backupError) {
+      console.error('Failed to recover from backup:', backupError);
+    }
+
     return []; // Always return empty array on error to prevent mock data
   }
 }
@@ -53,10 +79,36 @@ function saveTradesToLocalStorage(trades: Trade[]) {
   if (typeof window === 'undefined') return false;
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trades));
+    // Create backup before saving
+    const existing = localStorage.getItem(STORAGE_KEY);
+    if (existing) {
+      localStorage.setItem(`${STORAGE_KEY}_backup`, existing);
+    }
+
+    const serialized = JSON.stringify(trades);
+    localStorage.setItem(STORAGE_KEY, serialized);
+
+    // Verify the save was successful
+    const verification = localStorage.getItem(STORAGE_KEY);
+    if (verification !== serialized) {
+      throw new Error('localStorage verification failed');
+    }
+
     return true;
   } catch (error) {
     console.error('localStorage save error:', error);
+
+    // Try to restore from backup if save failed
+    try {
+      const backup = localStorage.getItem(`${STORAGE_KEY}_backup`);
+      if (backup) {
+        localStorage.setItem(STORAGE_KEY, backup);
+        console.log('Restored trades from backup');
+      }
+    } catch (restoreError) {
+      console.error('Failed to restore from backup:', restoreError);
+    }
+
     return false;
   }
 }
@@ -310,14 +362,46 @@ export const useTrades = () => {
   const { accountingMethod } = useAccountingMethod();
   const useCashBasis = accountingMethod === 'cash';
 
-  // Get true portfolio functions - this will be updated whenever 'trades' changes
-  const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
+  // Get true portfolio functions - use empty array to avoid circular dependency
+  const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades([]);
 
   // Memoize the recalculation helper that wraps the pure `recalculateAllTrades` function.
-  // This helper will only re-create if `getPortfolioSize` (a stable callback from useTruePortfolioWithTrades) changes.
-  const recalculateTradesWithCurrentPortfolio = React.useCallback((tradesToRecalculate: Trade[]) => {
-    return recalculateAllTrades(tradesToRecalculate, getPortfolioSize);
+  // Use a stable reference to getPortfolioSize to prevent infinite loops
+  const stableGetPortfolioSize = React.useCallback((month: string, year: number) => {
+    return getPortfolioSize(month, year);
   }, [getPortfolioSize]);
+
+  const recalculateTradesWithCurrentPortfolio = React.useCallback((tradesToRecalculate: Trade[]) => {
+    return recalculateAllTrades(tradesToRecalculate, stableGetPortfolioSize);
+  }, [stableGetPortfolioSize]);
+
+  // Memory usage monitor
+  React.useEffect(() => {
+    const checkMemoryUsage = () => {
+      if ('memory' in performance) {
+        const memInfo = (performance as any).memory;
+        const usedMB = memInfo.usedJSHeapSize / 1024 / 1024;
+        const limitMB = memInfo.jsHeapSizeLimit / 1024 / 1024;
+
+        if (usedMB > limitMB * 0.8) { // If using more than 80% of available memory
+          console.warn(`⚠️ High memory usage detected: ${usedMB.toFixed(2)}MB / ${limitMB.toFixed(2)}MB`);
+
+          // Force garbage collection if available
+          if (window.gc) {
+            try {
+              window.gc();
+              console.log('🗑️ Forced garbage collection due to high memory usage');
+            } catch (error) {
+              console.log('⚠️ Garbage collection not available');
+            }
+          }
+        }
+      }
+    };
+
+    const interval = setInterval(checkMemoryUsage, 30000); // Check every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   // Load from localStorage on mount. This effect should run only ONCE.
   React.useEffect(() => {
@@ -350,10 +434,14 @@ export const useTrades = () => {
     }
   }, [searchQuery, statusFilter, sortDescriptor, visibleColumns, isLoading]);
 
-  // Save trades to localStorage whenever they change
+  // Debounced save to localStorage to prevent excessive writes
   React.useEffect(() => {
-    if (trades.length > 0 || !isLoading) { // Only save if trades exist or if we're not loading (i.e. empty state after clear)
-      saveTradesToLocalStorage(trades);
+    if (trades.length > 0 || !isLoading) {
+      const timeoutId = setTimeout(() => {
+        saveTradesToLocalStorage(trades);
+      }, 500); // 500ms debounce
+
+      return () => clearTimeout(timeoutId);
     }
   }, [trades, isLoading]);
 
@@ -429,33 +517,74 @@ export const useTrades = () => {
   const filteredTrades = React.useMemo(() => {
     let result = [...trades];
 
+    // For cash basis, we need to handle trade filtering differently
+    // Instead of filtering trades, we need to expand trades with multiple exits
+    if (useCashBasis) {
+      // Expand trades with multiple exits into separate entries for cash basis
+      const expandedTrades: Trade[] = [];
+
+      result.forEach(trade => {
+        if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+          // Get all exits for this trade
+          const exits = [
+            { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
+            { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
+            { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
+          ].filter(exit => exit.date && exit.date.trim() !== '' && exit.qty > 0);
+
+          if (exits.length > 0) {
+            // Create a trade entry for each exit (for cash basis)
+            exits.forEach(exit => {
+              const expandedTrade: Trade = {
+                ...trade,
+                _cashBasisExit: {
+                  date: exit.date,
+                  qty: exit.qty,
+                  price: exit.price
+                }
+              };
+              expandedTrades.push(expandedTrade);
+            });
+          } else {
+            // Fallback: if no individual exit data, use the original trade
+            expandedTrades.push(trade);
+          }
+        } else {
+          // For open positions, include as-is
+          expandedTrades.push(trade);
+        }
+      });
+
+      result = expandedTrades;
+    }
+
     // Apply global filter using accounting method-aware date
     result = result.filter(trade => {
       const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
       return isInGlobalFilter(relevantDate, globalFilter);
     });
-    
+
     // Apply search filter
     if (searchQuery) {
       const lowerQuery = searchQuery.toLowerCase();
-      result = result.filter(trade => 
+      result = result.filter(trade =>
         trade.name.toLowerCase().includes(lowerQuery) ||
         trade.setup.toLowerCase().includes(lowerQuery) ||
         trade.tradeNo.toLowerCase().includes(lowerQuery)
       );
     }
-    
+
     // Apply status filter
     if (statusFilter) {
       result = result.filter(trade => trade.positionStatus === statusFilter);
     }
-    
+
     // Apply sorting
     if (sortDescriptor.column && sortDescriptor.direction) {
       result.sort((a, b) => {
         const aValue = a[sortDescriptor.column as keyof Trade];
         const bValue = b[sortDescriptor.column as keyof Trade];
-        
+
         let comparison = 0;
         // Handle different data types for sorting
         if (typeof aValue === 'number' && typeof bValue === 'number') {
@@ -468,18 +597,18 @@ export const useTrades = () => {
             comparison = aValue.localeCompare(bValue);
           }
         } else if (typeof aValue === 'boolean' && typeof bValue === 'boolean') {
-          comparison = (aValue === bValue) ? 0 : aValue ? -1 : 1; 
+          comparison = (aValue === bValue) ? 0 : aValue ? -1 : 1;
         } else {
           // Fallback for other types or mixed types (treat as strings)
           const StringA = String(aValue !== null && aValue !== undefined ? aValue : "");
           const StringB = String(bValue !== null && bValue !== undefined ? bValue : "");
           comparison = StringA.localeCompare(StringB);
         }
-        
+
         return sortDescriptor.direction === "ascending" ? comparison : -comparison;
       });
     }
-    
+
     return result;
   }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor, useCashBasis]);
 

@@ -81,7 +81,7 @@ export const TruePortfolioSetup: React.FC<TruePortfolioSetupProps> = ({
             scale: 1,
             y: 0,
             transition: {
-              duration: 0.4,
+              duration: 0.5,
               ease: [0.16, 1, 0.3, 1]
             }
           },
@@ -191,48 +191,52 @@ export const TruePortfolioSetup: React.FC<TruePortfolioSetupProps> = ({
 
                 <motion.div
                   className="space-y-3"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.4, delay: 0.8 }}
                 >
-                  <Input
-                    label="Your Name"
-                    placeholder="Enter your name"
-                    value={userName}
-                    onValueChange={setUserName}
-                    size="sm"
-                    variant="bordered"
-                    startContent={<Icon icon="lucide:user" className="text-default-400 text-base" />}
-                    isRequired
-                  />
-                </motion.div>
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.9 }}>
+                    <Input
+                      label="Your Name"
+                      placeholder="Enter your name"
+                      value={userName}
+                      onValueChange={setUserName}
+                      size="sm"
+                      variant="bordered"
+                      startContent={<Icon icon="lucide:user" className="text-default-400 text-base" />}
+                      isRequired
+                    />
+                  </motion.div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Input
-                      label="Year"
-                      placeholder="e.g., 2025"
-                      value={selectedYear}
-                      onValueChange={setSelectedYear}
-                      type="number"
-                      min="2000"
-                      max="2099"
-                      size="sm"
-                      variant="bordered"
-                    />
-                    <Input
-                      label="Starting Capital"
-                      placeholder="e.g., 100000"
-                      value={startingCapital}
-                      onValueChange={setStartingCapital}
-                      type="number"
-                      min="0"
-                      step="1000"
-                      startContent={<span className="text-default-400 text-base">₹</span>}
-                      size="sm"
-                      variant="bordered"
-                    />
-                  </div>
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 1.0 }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input
+                        label="Year"
+                        placeholder="e.g., 2025"
+                        value={selectedYear}
+                        onValueChange={setSelectedYear}
+                        type="number"
+                        min="2000"
+                        max="2099"
+                        size="sm"
+                        variant="bordered"
+                      />
+                      <Input
+                        label="Starting Capital"
+                        placeholder="e.g., 100000"
+                        value={startingCapital}
+                        onValueChange={setStartingCapital}
+                        type="number"
+                        min="0"
+                        step="1000"
+                        startContent={<span className="text-default-400 text-base">₹</span>}
+                        size="sm"
+                        variant="bordered"
+                      />
+                    </div>
+                  </motion.div>
                 </motion.div>
+              </motion.div>
 
               <motion.div
                 className="bg-gradient-to-r from-warning/10 to-orange/10 p-3 rounded-xl border border-warning/20"

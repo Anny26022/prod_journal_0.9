@@ -111,17 +111,16 @@ interface TradeStatisticsProps {
 export const TradeStatistics: React.FC<TradeStatisticsProps> = ({ trades }) => {
   const { displayName } = useAccountingMethodDisplay();
 
-  const totalTrades = trades.length;
-
-  // Use existing calculation logic (this component uses stockMove, not P/L)
-  const winTrades = trades.filter(t => (t.stockMove || 0) > 0);
-  const lossTrades = trades.filter(t => (t.stockMove || 0) < 0);
-  const winRate = totalTrades > 0 ? (winTrades.length / totalTrades) * 100 : 0;
-  const avgGain = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / winTrades.length : 0;
-  const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / lossTrades.length : 0;
-  const avgPositionSize = totalTrades > 0 ? trades.reduce((sum, t) => sum + (t.allocation || 0), 0) / totalTrades : 0;
-  const avgHoldingDays = totalTrades > 0 ? trades.reduce((sum, t) => sum + (t.holdingDays || 0), 0) / totalTrades : 0;
-  const avgR = totalTrades > 0 ? trades.reduce((sum, t) => sum + calcWeightedRewardRisk(t), 0) / totalTrades : 0;
+  // Use accounting-aware calculations from the shared hook
+  const {
+    totalTrades,
+    winRate,
+    avgPosMove,
+    avgNegMove,
+    avgPositionSize,
+    avgHoldingDays,
+    avgR
+  } = useAccountingCalculations(trades);
 
   return (
     <div className="space-y-4">
@@ -136,14 +135,14 @@ export const TradeStatistics: React.FC<TradeStatisticsProps> = ({ trades }) => {
         />
         <Stat
           label="Avg Gain"
-          value={avgGain.toFixed(2)}
+          value={avgPosMove.toFixed(2)}
           isPercentage
           tooltip="Average percentage gain on winning trades"
           index={1}
         />
         <Stat
           label="Avg Loss"
-          value={avgLoss.toFixed(2)}
+          value={avgNegMove.toFixed(2)}
           isPercentage
           tooltip="Average percentage loss on losing trades"
           index={2}
