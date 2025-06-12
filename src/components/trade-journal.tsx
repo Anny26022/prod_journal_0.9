@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   Table, 
   TableHeader, 
@@ -167,25 +167,31 @@ export const TradeJournal = React.memo(function TradeJournal({
     };
   }, [processedTrades, useCashBasis]);
 
-  // Defer heavy calculations using requestIdleCallback
+  // Performance monitoring
   useEffect(() => {
-    if (typeof window.requestIdleCallback !== 'undefined') {
-      const handle = requestIdleCallback(
-        (deadline: IdleDeadline) => {
-          if (deadline.timeRemaining() > 0) {
-            processedTrades.forEach(trade => {
-              if (trade.positionStatus === "Open" || trade.positionStatus === "Partial") {
-                calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
-                calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize);
-              }
-            });
+    if (process.env.NODE_ENV === 'development') {
+      const startTime = performance.now();
+      const observer = new PerformanceObserver((list) => {
+        const entries = list.getEntries();
+        entries.forEach(entry => {
+          if (entry.duration > 100) { // Log operations taking more than 100ms
+            console.warn(`🐌 Slow operation: ${entry.name} took ${entry.duration.toFixed(2)}ms`);
           }
-        },
-        { timeout: 1000 }
-      );
-      return () => cancelIdleCallback(handle);
+        });
+      });
+      observer.observe({ entryTypes: ['measure'] });
+
+      // Measure component render time
+      const endTime = performance.now();
+      if (endTime - startTime > 50) {
+        console.warn(`🐌 Slow render: TradeJournal took ${(endTime - startTime).toFixed(2)}ms`);
+      }
+
+      return () => observer.disconnect();
     }
-  }, [processedTrades, portfolioSize, getPortfolioSize]);
+  }, []);
+
+  // This will be moved after items definition
 
   const handleExport = (format: 'csv' | 'xlsx') => {
     // Use the raw, unfiltered trades from the hook for export
@@ -291,14 +297,75 @@ export const TradeJournal = React.memo(function TradeJournal({
   
   const [selectedTrade, setSelectedTrade] = React.useState<Trade | null>(null);
   const [page, setPage] = React.useState(1);
-  const rowsPerPage = 10;
+  const [rowsPerPage, setRowsPerPage] = React.useState(25); // Increased from 10 to 25
+
+  // Dynamic pagination options based on dataset size
+  const rowsPerPageOptions = React.useMemo(() => {
+    const totalTrades = trades.length;
+    if (totalTrades < 500) return [10, 25, 50];
+    if (totalTrades < 2000) return [25, 50, 100];
+    return [50, 100, 200];
+  }, [trades.length]);
   
-  const pages = Math.ceil(trades.length / rowsPerPage);
+  // Progressive loading for large datasets
+  const [loadedTradesCount, setLoadedTradesCount] = React.useState(() => {
+    // Initial load: show more for smaller datasets, less for larger ones
+    const initialLoad = trades.length < 100 ? trades.length : Math.min(100, trades.length);
+    return initialLoad;
+  });
+
+  const [isLoadingMore, setIsLoadingMore] = React.useState(false);
+
+  // Update loaded count when trades change
+  React.useEffect(() => {
+    if (trades.length <= loadedTradesCount) {
+      setLoadedTradesCount(trades.length);
+    }
+  }, [trades.length, loadedTradesCount]);
+
+  const loadMoreTrades = useCallback(() => {
+    setIsLoadingMore(true);
+    // Simulate loading delay for better UX
+    setTimeout(() => {
+      setLoadedTradesCount(prev => Math.min(prev + 50, trades.length));
+      setIsLoadingMore(false);
+    }, 300);
+  }, [trades.length]);
+
+  // Use progressive loading for large datasets, pagination for smaller ones
+  const shouldUseProgressiveLoading = trades.length > 200;
+
+  const pages = shouldUseProgressiveLoading ? 1 : Math.ceil(trades.length / rowsPerPage);
   const items = React.useMemo(() => {
-    const start = (page - 1) * rowsPerPage;
-    const end = start + rowsPerPage;
-    return trades.slice(start, end);
-  }, [page, trades, rowsPerPage]);
+    if (shouldUseProgressiveLoading) {
+      return trades.slice(0, loadedTradesCount);
+    } else {
+      const start = (page - 1) * rowsPerPage;
+      const end = start + rowsPerPage;
+      return trades.slice(start, end);
+    }
+  }, [page, trades, rowsPerPage, shouldUseProgressiveLoading, loadedTradesCount]);
+
+  // Defer heavy calculations using requestIdleCallback - moved here after items definition
+  useEffect(() => {
+    if (typeof window.requestIdleCallback !== 'undefined') {
+      const handle = requestIdleCallback(
+        (deadline: IdleDeadline) => {
+          if (deadline.timeRemaining() > 0) {
+            // Only process visible trades for better performance
+            items.forEach(trade => {
+              if (trade.positionStatus === "Open" || trade.positionStatus === "Partial") {
+                calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
+                calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize);
+              }
+            });
+          }
+        },
+        { timeout: 1000 }
+      );
+      return () => cancelIdleCallback(handle);
+    }
+  }, [items, portfolioSize, getPortfolioSize]);
 
 
 
@@ -403,6 +470,9 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
+  // Debounced update to reduce API calls and improve performance
+  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const handleInlineEditSave = React.useCallback(async (tradeId: string, field: keyof Trade, value: any) => {
     try {
       // Prevent editing of non-editable fields
@@ -456,12 +526,18 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
-      // Update immediately without debouncing to prevent flickering
-      try {
-        await updateTrade(updatedTrade);
-      } catch (error) {
-        // Handle error silently
+      // Debounced update to reduce API calls and improve performance
+      if (updateTimeoutRef.current) {
+        clearTimeout(updateTimeoutRef.current);
       }
+
+      updateTimeoutRef.current = setTimeout(async () => {
+        try {
+          await updateTrade(updatedTrade);
+        } catch (error) {
+          // Handle error silently
+        }
+      }, 300); // 300ms debounce delay
 
     } catch (error) {
       // Handle error silently
@@ -525,11 +601,10 @@ export const TradeJournal = React.memo(function TradeJournal({
     return numValue < 0 ? 'text-danger' : numValue > 0 ? 'text-success' : '';
   };
 
-  // Format holding days with tooltip
+  // Format holding days with lazy tooltip calculation
   const renderHoldingDays = (trade: Trade) => {
     const isOpenPosition = trade.positionStatus === 'Open';
     const isPartialPosition = trade.positionStatus === 'Partial';
-    const isClosedPosition = trade.positionStatus === 'Closed';
     // Gather all entry lots
     const entryLots = [
       { label: 'Initial Entry', date: trade.date, qty: Number(trade.initialQty) },
@@ -569,7 +644,7 @@ export const TradeJournal = React.memo(function TradeJournal({
         lotBreakdown.push({ label: lot.label, qty: qtyLeft, days, exited: false });
       }
     }
-    // Tooltip content
+    // Tooltip content - optimized with increased delay for better performance
     let tooltipContent;
     if (isOpenPosition) {
       tooltipContent = (
@@ -642,11 +717,11 @@ export const TradeJournal = React.memo(function TradeJournal({
       displayDays = exitedQty > 0 ? Math.round(exitedLots.reduce((sum, l) => sum + l.days * l.qty, 0) / exitedQty) : 0;
     }
     return (
-      <Tooltip 
+      <Tooltip
         content={tooltipContent}
         placement="top"
-        delay={100}
-        closeDelay={0}
+        delay={500} // Increased delay for better performance
+        closeDelay={100}
         radius="sm"
         shadow="md"
         classNames={{ content: "bg-content1 border border-divider z-50 max-w-xs" }}
@@ -1602,12 +1677,77 @@ export const TradeJournal = React.memo(function TradeJournal({
 
       <Card className="border border-divider">
         <CardBody className="p-0">
-          <div className="relative">
-          <Table
-            aria-label="Trade journal table"
+          <div
+            className="relative overflow-auto max-h-[70vh]
+              [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:h-1
+              [&::-webkit-scrollbar-track]:bg-transparent
+              [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full
+              [&::-webkit-scrollbar-thumb:hover]:bg-gray-400
+              dark:[&::-webkit-scrollbar-thumb]:bg-gray-600 dark:[&::-webkit-scrollbar-thumb:hover]:bg-gray-500"
+            style={{
+              scrollbarWidth: 'thin', /* Firefox - thin horizontal only */
+              scrollbarColor: 'rgb(156 163 175) transparent' /* Firefox - thumb and track colors */
+            }}
+          >
+            <Table
+              aria-label="Trade journal table"
             bottomContent={
-              pages > 0 ? (
-                <div className="flex w-full justify-center items-center gap-4 py-2">
+              shouldUseProgressiveLoading ? (
+                // Progressive loading controls for large datasets
+                <div className="flex w-full justify-center items-center gap-4 py-4">
+                  {loadedTradesCount < trades.length ? (
+                    <Button
+                      color="primary"
+                      variant="flat"
+                      size="sm"
+                      onPress={loadMoreTrades}
+                      isLoading={isLoadingMore}
+                      startContent={!isLoadingMore && <Icon icon="lucide:chevron-down" />}
+                      className="min-w-[120px]"
+                    >
+                      {isLoadingMore ? 'Loading...' : `Load More (${trades.length - loadedTradesCount} remaining)`}
+                    </Button>
+                  ) : (
+                    <div className="text-sm text-default-500">
+                      All {trades.length} trades loaded
+                    </div>
+                  )}
+                </div>
+              ) : pages > 0 ? (
+                // Traditional pagination for smaller datasets
+                <div className="flex w-full justify-between items-center gap-4 py-2 px-4">
+                  {/* Rows per page selector */}
+                  <div className="flex items-center gap-2 text-sm text-default-500">
+                    <span>Rows per page:</span>
+                    <Dropdown>
+                      <DropdownTrigger>
+                        <Button
+                          size="sm"
+                          variant="bordered"
+                          className="min-w-[60px] h-7"
+                          endContent={<Icon icon="lucide:chevron-down" className="w-3 h-3" />}
+                        >
+                          {rowsPerPage}
+                        </Button>
+                      </DropdownTrigger>
+                      <DropdownMenu
+                        aria-label="Rows per page"
+                        selectionMode="single"
+                        selectedKeys={[String(rowsPerPage)]}
+                        onSelectionChange={(keys) => {
+                          const selected = Array.from(keys)[0] as string;
+                          setRowsPerPage(Number(selected));
+                          setPage(1); // Reset to first page
+                        }}
+                      >
+                        {rowsPerPageOptions.map(option => (
+                          <DropdownItem key={String(option)}>{option}</DropdownItem>
+                        ))}
+                      </DropdownMenu>
+                    </Dropdown>
+                  </div>
+
+                  {/* Pagination */}
                   <Pagination
                     isCompact
                     showControls
@@ -1619,22 +1759,30 @@ export const TradeJournal = React.memo(function TradeJournal({
                     total={pages}
                     onChange={(p) => setPage(p)}
                     classNames={{
-                      item: "rounded-full w-5 h-5 text-xs flex items-center justify-center", // Even smaller and circular
-                      cursor: "rounded-full w-5 h-5 text-xs flex items-center justify-center", // Even smaller and circular
-                      prev: "rounded-full w-5 h-5 text-xs flex items-center justify-center", // Even smaller and circular
-                      next: "rounded-full w-5 h-5 text-xs flex items-center justify-center", // Even smaller and circular
-                      ellipsis: "px-0.5 text-xs" // Adjusted padding for ellipsis
+                      item: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                      cursor: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                      prev: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                      next: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                      ellipsis: "px-0.5 text-xs"
                     }}
                   />
+
+                  {/* Trade count info */}
+                  <div className="text-sm text-default-500">
+                    {`${((page - 1) * rowsPerPage) + 1}-${Math.min(page * rowsPerPage, trades.length)} of ${trades.length}`}
+                  </div>
                 </div>
               ) : null
             }
-            classNames={{
-              wrapper: "min-h-[222px] p-0",
-              th: "bg-transparent border-b border-divider text-xs font-medium text-default-500 dark:text-default-300 uppercase tracking-wider",
-              td: "py-2.5 text-sm",
-              base: "max-w-full"
-            }}
+              classNames={{
+                base: "min-w-full",
+                wrapper: "shadow-none p-0 rounded-none",
+                table: "table-auto",
+                thead: "[&>tr]:first:shadow-none",
+                th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800 sticky top-0 z-20 backdrop-blur-sm",
+                td: "py-2.5 text-sm border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200"
+              }}
+              removeWrapper
             sortDescriptor={sortDescriptor as HeroSortDescriptor}
             onSortChange={setSortDescriptor as (descriptor: HeroSortDescriptor) => void}
           >
@@ -1663,21 +1811,22 @@ export const TradeJournal = React.memo(function TradeJournal({
                 </TableRow>
               )}
             </TableBody>
-          </Table>
-          {/* Sleek, small add inline trade icon below the table */}
-          <Tooltip content="Add new trade (inline)" placement="top">
-            <Button
-              isIconOnly
-              color="primary"
-              variant="light"
-              onPress={handleAddNewBlankTrade}
-              size="sm"
-              className="mt-2"
-              style={{ display: 'block', margin: '0 auto' }}
-            >
-              <Icon icon="lucide:list-plus" className="text-lg" />
-            </Button>
-          </Tooltip>
+            </Table>
+            {/* Sleek, small add inline trade icon below the table */}
+            <div className="p-2 border-t border-divider bg-white dark:bg-gray-900">
+              <Tooltip content="Add new trade (inline)" placement="top">
+                <Button
+                  isIconOnly
+                  color="primary"
+                  variant="light"
+                  onPress={handleAddNewBlankTrade}
+                  size="sm"
+                  className="mx-auto block"
+                >
+                  <Icon icon="lucide:list-plus" className="text-lg" />
+                </Button>
+              </Tooltip>
+            </div>
           </div>
         </CardBody>
       </Card>

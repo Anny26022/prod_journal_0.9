@@ -351,13 +351,20 @@ const ALL_COLUMNS = [
   'planFollowed', 'exitTrigger', 'proficiencyGrowthAreas', 'unrealizedPL', 'actions', 'notes'
 ];
 
+// Optimized default columns for better performance - show only essential columns initially
+const DEFAULT_VISIBLE_COLUMNS = [
+  'tradeNo', 'date', 'name', 'setup', 'buySell', 'entry', 'sl', 'cmp',
+  'initialQty', 'positionSize', 'openQty', 'exitedQty', 'avgExitPrice',
+  'rewardRisk', 'holdingDays', 'positionStatus', 'plRs', 'actions'
+];
+
 export const useTrades = () => {
   const [trades, setTrades] = React.useState<Trade[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState('');
   const [sortDescriptor, setSortDescriptor] = React.useState<SortDescriptor>({ column: 'tradeNo', direction: 'ascending' });
-  const [visibleColumns, setVisibleColumns] = React.useState<string[]>(ALL_COLUMNS);
+  const [visibleColumns, setVisibleColumns] = React.useState<string[]>(DEFAULT_VISIBLE_COLUMNS);
   const { filter: globalFilter } = useGlobalFilter();
   const { accountingMethod } = useAccountingMethod();
   const useCashBasis = accountingMethod === 'cash';
@@ -417,7 +424,7 @@ export const useTrades = () => {
     setSearchQuery(settings?.search_query || '');
     setStatusFilter(settings?.status_filter || '');
     setSortDescriptor(settings?.sort_descriptor || { column: 'tradeNo', direction: 'ascending' });
-    setVisibleColumns(settings?.visible_columns || ALL_COLUMNS);
+    setVisibleColumns(settings?.visible_columns || DEFAULT_VISIBLE_COLUMNS);
     setIsLoading(false);
   }, []); // Empty dependency array means it runs only once on mount.
 
@@ -485,7 +492,7 @@ export const useTrades = () => {
       setSearchQuery('');
       setStatusFilter('');
       setSortDescriptor({ column: 'tradeNo', direction: 'ascending' });
-      setVisibleColumns(ALL_COLUMNS);
+      setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
       setIsLoading(false);
 
       // Force garbage collection if available (Chrome DevTools)
