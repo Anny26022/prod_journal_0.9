@@ -1,17 +1,18 @@
 import React from "react";
-import { 
-  Tooltip, 
-  Dropdown, 
-  DropdownTrigger, 
-  DropdownMenu, 
+import {
+  Tooltip,
+  Dropdown,
+  DropdownTrigger,
+  DropdownMenu,
   DropdownItem,
-  Button 
+  Button
 } from "@heroui/react";
 import { Icon } from "@iconify/react";
 import { motion } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { calcWeightedRewardRisk } from '../../utils/tradeCalculations';
 import { metricVariants } from "../../utils/animations";
+import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
 
 interface TopPerformerProps {
   label: string;
@@ -105,17 +106,23 @@ interface TopPerformersProps {
 type MetricFilter = "stockMove" | "pfImpact" | "rewardRisk" | "plRs";
 
 export const TopPerformers: React.FC<TopPerformersProps> = ({ trades }) => {
+  const { tradesWithAccountingPL } = useAccountingCalculations(trades);
+  const { displayName } = useAccountingMethodDisplay();
   const [metricFilter, setMetricFilter] = React.useState<MetricFilter>("stockMove");
 
   // Get top and bottom performers based on selected metric
   const { top, bottom } = React.useMemo(() => {
-    if (!trades || !trades.length) return { top: null, bottom: null };
+    if (!tradesWithAccountingPL || !tradesWithAccountingPL.length) return { top: null, bottom: null };
 
-    const sortedTrades = [...trades].sort((a, b) => {
+    const sortedTrades = [...tradesWithAccountingPL].sort((a, b) => {
       let aValue, bValue;
       if (metricFilter === 'rewardRisk') {
         aValue = calcWeightedRewardRisk(a);
         bValue = calcWeightedRewardRisk(b);
+      } else if (metricFilter === 'plRs') {
+        // Use accounting method P/L from shared calculations
+        aValue = a.accountingPL;
+        bValue = b.accountingPL;
       } else {
         aValue = a[metricFilter] || 0;
         bValue = b[metricFilter] || 0;
@@ -127,18 +134,20 @@ export const TopPerformers: React.FC<TopPerformersProps> = ({ trades }) => {
       top: sortedTrades[0],
       bottom: sortedTrades[sortedTrades.length - 1]
     };
-  }, [trades, metricFilter]);
+  }, [tradesWithAccountingPL, metricFilter]);
 
   // Format metric value based on type
-  const formatMetricValue = (value: number, trade?: Trade) => {
+  const formatMetricValue = (value: number, trade?: any) => {
     if (metricFilter === 'plRs') {
+      // For P/L, use accounting method value from shared calculations
+      const plValue = trade?.accountingPL ?? value;
       return new Intl.NumberFormat('en-IN', {
         style: 'currency',
         currency: 'INR',
         minimumFractionDigits: 0,
         maximumFractionDigits: 0,
         useGrouping: true
-      }).format(value);
+      }).format(plValue);
     }
     if (metricFilter === 'rewardRisk' && trade) {
       const rr = calcWeightedRewardRisk(trade);
@@ -183,6 +192,12 @@ export const TopPerformers: React.FC<TopPerformersProps> = ({ trades }) => {
 
   return (
     <div className="space-y-4">
+      {/* Accounting Method Indicator */}
+      <div className="flex items-center gap-2 text-sm text-default-600">
+        <Icon icon="lucide:trophy" className="w-4 h-4" />
+        <span>Top performers using {displayName} Accounting</span>
+      </div>
+
       <div className="flex justify-end">
         <Dropdown>
           <DropdownTrigger>
@@ -211,18 +226,28 @@ export const TopPerformers: React.FC<TopPerformersProps> = ({ trades }) => {
       </div>
 
       <div className="space-y-2">
-        <TopPerformer 
+        <TopPerformer
           label={`Highest ${getMetricLabel()}`}
-          value={formatMetricValue(metricFilter === 'rewardRisk' ? calcWeightedRewardRisk(top) : top[metricFilter] || 0, top)}
+          value={formatMetricValue(
+            metricFilter === 'rewardRisk' ? calcWeightedRewardRisk(top) :
+            metricFilter === 'plRs' ? top.accountingPL :
+            top[metricFilter] || 0,
+            top
+          )}
           stock={top.name}
           date={top.date}
           isPercentage={metricFilter !== "plRs" && metricFilter !== "rewardRisk"}
           isPositive
           index={0}
         />
-        <TopPerformer 
+        <TopPerformer
           label={`Lowest ${getMetricLabel()}`}
-          value={formatMetricValue(metricFilter === 'rewardRisk' ? calcWeightedRewardRisk(bottom) : bottom[metricFilter] || 0, bottom)}
+          value={formatMetricValue(
+            metricFilter === 'rewardRisk' ? calcWeightedRewardRisk(bottom) :
+            metricFilter === 'plRs' ? bottom.accountingPL :
+            bottom[metricFilter] || 0,
+            bottom
+          )}
           stock={bottom.name}
           date={bottom.date}
           isPercentage={metricFilter !== "plRs" && metricFilter !== "rewardRisk"}

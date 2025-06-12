@@ -17,8 +17,12 @@ export default {
         h1: ['2.25rem', { lineHeight: '1.15', fontWeight: '700' }], // 36px
         h2: ['1.5rem', { lineHeight: '1.2', fontWeight: '700' }], // 24px
         h3: ['1.25rem', { lineHeight: '1.3', fontWeight: '700' }], // 20px
-        base: ['1rem', { lineHeight: '1.5', fontWeight: '400' }], // 16px
+        base: ['0.9375rem', { lineHeight: '1.5', fontWeight: '400' }], // 15px
         sm: ['0.875rem', { lineHeight: '1.5', fontWeight: '400' }], // 14px
+        tiny: "0.8125rem", // 13px
+        small: "0.875rem", // 14px
+        medium: "0.9375rem",    // 15px
+        large: "1.0625rem",  // 17px
       },
       colors: {
         primary: {

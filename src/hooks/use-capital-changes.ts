@@ -2,6 +2,7 @@ import React from 'react';
 import { CapitalChange, MonthlyCapital, MonthlyCapitalHistory } from '../types/trade';
 import { generateId } from '../utils/helpers';
 import { usePortfolio } from '../utils/PortfolioContext';
+import { calculateTradePL } from '../utils/accountingUtils';
 // Removed Supabase import - using localStorage only
 
 const CAPITAL_CHANGES_STORAGE_KEY = 'capital_changes';
@@ -76,7 +77,7 @@ function saveMonthlyCapitalHistory(history: any[]) {
   }
 }
 
-export const useCapitalChanges = (trades: any[], initialPortfolioSize: number) => {
+export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, useCashBasis: boolean = false) => {
   const { getPortfolioSize, setPortfolioSize, monthlyPortfolioSizes } = usePortfolio();
   
   const months = [
@@ -218,8 +219,8 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number) =
       const withdrawals = monthData.changes.filter(c => c.type === 'withdrawal').reduce((sum, c) => sum + Math.abs(c.amount), 0);
       const netChange = deposits - withdrawals;
 
-      // Calculate P/L from trades
-      const pl = monthData.trades.reduce((sum, t) => sum + (t.plRs || 0), 0);
+      // Calculate P/L from trades using accounting method
+      const pl = monthData.trades.reduce((sum, t) => sum + calculateTradePL(t, useCashBasis), 0);
 
       // Calculate final capital for the month
       const finalCapital = startingCapital + netChange + pl;
@@ -243,7 +244,7 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number) =
 
     setMonthlyCapital(monthlyCapitalData);
 
-  }, [trades, capitalChanges, getPortfolioSize, monthlyPortfolioSizes, initialPortfolioSize, months]); // Added months to dependencies
+  }, [trades, capitalChanges, getPortfolioSize, monthlyPortfolioSizes, initialPortfolioSize, months, useCashBasis]); // Added months and useCashBasis to dependencies
 
   const addCapitalChange = React.useCallback((change: Omit<CapitalChange, 'id'>) => {
     const newChange = {

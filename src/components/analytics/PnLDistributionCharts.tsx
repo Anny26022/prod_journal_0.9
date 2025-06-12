@@ -1,20 +1,25 @@
 import React, { useMemo } from 'react';
 import { Card, CardBody, CardHeader, Divider } from "@heroui/react";
+import { Icon } from "@iconify/react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Trade } from '../../types/trade';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAccountingCalculations, useAccountingMethodDisplay } from '../../hooks/use-accounting-calculations';
 
 interface PnLDistributionChartsProps {
     trades: Trade[];
 }
 
 const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades }) => {
-    // Calculate PnL by Symbol
+    const { tradesWithAccountingPL } = useAccountingCalculations(trades);
+    const { displayName } = useAccountingMethodDisplay();
+
+    // Calculate PnL by Symbol using accounting method
     const symbolPnLData = useMemo(() => {
-        const pnlBySymbol = trades.reduce((acc, trade) => {
+        const pnlBySymbol = tradesWithAccountingPL.reduce((acc, trade) => {
             if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
                 const symbol = trade.name;
-                acc[symbol] = (acc[symbol] || 0) + trade.plRs;
+                acc[symbol] = (acc[symbol] || 0) + trade.accountingPL;
             }
             return acc;
         }, {} as Record<string, number>);
@@ -24,16 +29,16 @@ const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades })
             .map(([symbol, pnl]) => ({ symbol, pnl }))
             .sort((a, b) => b.pnl - a.pnl)
             .slice(0, 10); // Top 10 symbols
-    }, [trades]);
+    }, [tradesWithAccountingPL]);
 
-    // Calculate PnL by Day of Week
+    // Calculate PnL by Day of Week using accounting method
     const dayPnLData = useMemo(() => {
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        const pnlByDay = trades.reduce((acc, trade) => {
+        const pnlByDay = tradesWithAccountingPL.reduce((acc, trade) => {
             if ((trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') && trade.date) {
                 const dayIndex = new Date(trade.date).getDay();
                 const day = days[dayIndex];
-                acc[day] = (acc[day] || 0) + trade.plRs;
+                acc[day] = (acc[day] || 0) + trade.accountingPL;
             }
             return acc;
         }, {} as Record<string, number>);
@@ -43,7 +48,7 @@ const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades })
             day,
             pnl: pnlByDay[day] || 0
         }));
-    }, [trades]);
+    }, [tradesWithAccountingPL]);
 
     const formatCurrency = (value: number) => {
         return new Intl.NumberFormat('en-IN', {
@@ -112,12 +117,17 @@ const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades })
     };
 
     return (
-        <motion.div 
+        <motion.div
             className="space-y-8"
             variants={containerVariants}
             initial="hidden"
             animate="visible"
         >
+            {/* Accounting Method Indicator */}
+            <div className="flex items-center gap-2 text-sm text-default-600 bg-default-50 p-3 rounded-lg">
+                <Icon icon="lucide:bar-chart-3" className="w-4 h-4" />
+                <span>P/L distributions calculated using {displayName} Accounting</span>
+            </div>
             {/* Symbol-wise PnL Chart */}
             <motion.div variants={cardVariants}>
                 <Card className="border border-divider shadow-sm hover:shadow-md transition-shadow duration-200 bg-background">

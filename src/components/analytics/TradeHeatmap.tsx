@@ -4,19 +4,27 @@ import "react-calendar-heatmap/dist/styles.css";
 import { Card, Tooltip } from "@heroui/react";
 import { motion } from "framer-motion";
 import { formatCurrency } from "../../utils/formatters";
+import { useAccountingMethod } from "../../context/AccountingMethodContext";
+import { calculateTradePL, getTradeDateForAccounting } from "../../utils/accountingUtils";
 
 interface TradeHeatmapProps {
-  trades: { date: string; plRs: number }[];
+  trades: any[];
   startDate: string;
   endDate: string;
   className?: string;
 }
 
 const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate, className }) => {
-  // Aggregate P&L by date
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
+
+  // Aggregate P&L by date using accounting method-aware dates
   const data = trades.reduce((acc, trade) => {
-    const day = trade.date.split("T")[0];
-    acc[day] = (acc[day] || 0) + trade.plRs;
+    // Use accounting method-aware date for aggregation
+    const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
+    const day = relevantDate.split("T")[0];
+    const tradePL = calculateTradePL(trade, useCashBasis);
+    acc[day] = (acc[day] || 0) + tradePL;
     return acc;
   }, {} as Record<string, number>);
 
@@ -39,6 +47,7 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
 
     return (
       <Tooltip
+        key={value.date}
         content={
           <div className="p-2 text-sm">
             <p className="font-medium">{formattedDate}</p>
@@ -56,6 +65,7 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
         >
           {React.cloneElement(element, {
             ...element.props,
+            key: value ? value.date : `empty-${element.props.x}-${element.props.y}`,
             rx: 2,
             className: `${element.props.className} cursor-pointer`,
           })}

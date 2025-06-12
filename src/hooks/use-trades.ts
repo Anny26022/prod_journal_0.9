@@ -4,6 +4,8 @@ import { mockTrades } from "../data/mock-trades";
 import { useTruePortfolioWithTrades } from "./use-true-portfolio-with-trades";
 import { useGlobalFilter } from "../context/GlobalFilterContext";
 import { isInGlobalFilter } from "../utils/dateFilterUtils";
+import { useAccountingMethod } from "../context/AccountingMethodContext";
+import { getTradeDateForAccounting } from "../utils/accountingUtils";
 import {
   calcAvgEntry,
   calcPositionSize,
@@ -84,26 +86,61 @@ function saveTradeSettings(settings: any) {
 function clearAllTradeAndSettingsData() {
   if (typeof window === 'undefined') return false;
   try {
+    console.log('🗑️ Starting comprehensive localStorage clearing...');
+
+    // Core trade data
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(TRADE_SETTINGS_KEY);
-    // Clear all misc_ data as well
+
+    // Clear all misc_ data
+    const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith(MISC_DATA_PREFIX)) {
-        localStorage.removeItem(key);
+      if (key) {
+        keysToRemove.push(key);
       }
     }
-    // Clear TruePortfolioContext related localStorage keys
-    localStorage.removeItem('yearlyStartingCapitals');
-    localStorage.removeItem('capitalChanges');
-    localStorage.removeItem('monthlyStartingCapitalOverrides');
-    localStorage.removeItem('globalFilter'); // Also clear global filter
-    localStorage.removeItem('heroui-theme'); // Clear theme settings if applicable
-    localStorage.removeItem('userPreferences'); // Clear user preferences if applicable
 
+    // Remove keys that match our patterns
+    keysToRemove.forEach(key => {
+      if (key.startsWith(MISC_DATA_PREFIX) ||
+          key.startsWith('tradeBackup_') ||
+          key.startsWith('tradeModal_') ||
+          key === 'yearlyStartingCapitals' ||
+          key === 'capitalChanges' ||
+          key === 'monthlyStartingCapitalOverrides' ||
+          key === 'globalFilter' ||
+          key === 'heroui-theme' ||
+          key === 'userPreferences' ||
+          key === 'accountingMethod' ||
+          key === 'dashboardConfig' ||
+          key === 'milestones' ||
+          key === 'achievements' ||
+          key.includes('trade') ||
+          key.includes('portfolio') ||
+          key.includes('settings') ||
+          key.includes('config')) {
+        try {
+          localStorage.removeItem(key);
+          console.log(`🗑️ Removed localStorage key: ${key}`);
+        } catch (error) {
+          console.error(`❌ Failed to remove key ${key}:`, error);
+        }
+      }
+    });
+
+    // Clear sessionStorage as well
+    try {
+      sessionStorage.clear();
+      console.log('🗑️ Cleared all sessionStorage');
+    } catch (error) {
+      console.error('❌ Failed to clear sessionStorage:', error);
+    }
+
+    console.log('✅ Comprehensive localStorage clearing completed');
     return true;
   } catch (error) {
-    console.error('Error clearing all trade and settings data from localStorage:', error);
+    console.error('💥 Error clearing all trade and settings data from localStorage:', error);
     return false;
   }
 }
@@ -270,6 +307,8 @@ export const useTrades = () => {
   const [sortDescriptor, setSortDescriptor] = React.useState<SortDescriptor>({ column: 'tradeNo', direction: 'ascending' });
   const [visibleColumns, setVisibleColumns] = React.useState<string[]>(ALL_COLUMNS);
   const { filter: globalFilter } = useGlobalFilter();
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
 
   // Get true portfolio functions - this will be updated whenever 'trades' changes
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
@@ -350,20 +389,51 @@ export const useTrades = () => {
   }, [recalculateTradesWithCurrentPortfolio]);
 
   const clearAllTrades = React.useCallback(() => {
+    console.log('🗑️ Starting clearAllTrades process...');
+
     if (clearAllTradeAndSettingsData()) {
+      // Reset all React state to initial values
       setTrades([]);
       setSearchQuery('');
       setStatusFilter('');
       setSortDescriptor({ column: 'tradeNo', direction: 'ascending' });
       setVisibleColumns(ALL_COLUMNS);
+      setIsLoading(false);
+
+      // Force garbage collection if available (Chrome DevTools)
+      if (window.gc) {
+        try {
+          window.gc();
+          console.log('🗑️ Forced garbage collection');
+        } catch (error) {
+          console.log('⚠️ Garbage collection not available');
+        }
+      }
+
+      // Clear any cached data in memory
+      if (typeof window !== 'undefined') {
+        // Clear any global variables that might hold trade data
+        (window as any).tradeCache = undefined;
+        (window as any).portfolioCache = undefined;
+        (window as any).settingsCache = undefined;
+      }
+
+      console.log('✅ All trades and state cleared successfully');
+      return true;
     }
+
+    console.error('❌ Failed to clear trade data');
+    return false;
   }, []);
 
   const filteredTrades = React.useMemo(() => {
     let result = [...trades];
-    
-    // Apply global filter
-    result = result.filter(trade => isInGlobalFilter(trade.date, globalFilter));
+
+    // Apply global filter using accounting method-aware date
+    result = result.filter(trade => {
+      const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
+      return isInGlobalFilter(relevantDate, globalFilter);
+    });
     
     // Apply search filter
     if (searchQuery) {
@@ -411,7 +481,7 @@ export const useTrades = () => {
     }
     
     return result;
-  }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor]);
+  }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor, useCashBasis]);
 
   return {
     trades: filteredTrades,

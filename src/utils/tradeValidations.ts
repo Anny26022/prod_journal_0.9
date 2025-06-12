@@ -7,22 +7,59 @@ export interface TradeIssue {
 
 export function validateTrade(trade: Trade): TradeIssue[] {
   const issues: TradeIssue[] = [];
-  
+
   // Calculate total bought quantity
-  const totalBoughtQty = (trade.initialQty || 0) + 
-    (trade.pyramid1Qty || 0) + 
+  const totalBoughtQty = (trade.initialQty || 0) +
+    (trade.pyramid1Qty || 0) +
     (trade.pyramid2Qty || 0);
 
   // Calculate total exit quantity
-  const totalExitQty = (trade.exit1Qty || 0) + 
-    (trade.exit2Qty || 0) + 
+  const totalExitQty = (trade.exit1Qty || 0) +
+    (trade.exit2Qty || 0) +
     (trade.exit3Qty || 0);
 
-  // 1. Exit qty > Bought qty (ERROR)
-  if (totalExitQty > totalBoughtQty) {
+  // 1. Exit qty > Bought qty (ERROR) - but only if there are actual exits
+  if (totalExitQty > 0 && totalExitQty > totalBoughtQty) {
     issues.push({
       type: 'error',
-      message: `Exit quantity (${totalExitQty}) cannot be greater than bought quantity (${totalBoughtQty})`
+      message: `Exit quantity (${totalExitQty}) cannot be greater than bought quantity (${totalBoughtQty}). Please check your pyramid and exit quantities.`
+    });
+  }
+
+  // 2. Pyramid quantities without prices (WARNING)
+  if ((trade.pyramid1Qty || 0) > 0 && !(trade.pyramid1Price || 0) > 0) {
+    issues.push({
+      type: 'warning',
+      message: 'Pyramid 1 has quantity but no price specified'
+    });
+  }
+
+  if ((trade.pyramid2Qty || 0) > 0 && !(trade.pyramid2Price || 0) > 0) {
+    issues.push({
+      type: 'warning',
+      message: 'Pyramid 2 has quantity but no price specified'
+    });
+  }
+
+  // 3. Exit quantities without prices (WARNING)
+  if ((trade.exit1Qty || 0) > 0 && !(trade.exit1Price || 0) > 0) {
+    issues.push({
+      type: 'warning',
+      message: 'Exit 1 has quantity but no price specified'
+    });
+  }
+
+  if ((trade.exit2Qty || 0) > 0 && !(trade.exit2Price || 0) > 0) {
+    issues.push({
+      type: 'warning',
+      message: 'Exit 2 has quantity but no price specified'
+    });
+  }
+
+  if ((trade.exit3Qty || 0) > 0 && !(trade.exit3Price || 0) > 0) {
+    issues.push({
+      type: 'warning',
+      message: 'Exit 3 has quantity but no price specified'
     });
   }
 

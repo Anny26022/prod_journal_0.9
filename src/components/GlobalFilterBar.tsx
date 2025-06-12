@@ -2,6 +2,8 @@ import React from "react";
 import { useGlobalFilter } from "../context/GlobalFilterContext";
 import { Button, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, Input, Tooltip } from "@heroui/react";
 import { Icon } from "@iconify/react";
+import { useTrades } from "../hooks/use-trades";
+import { useAccountingMethod } from "../context/AccountingMethodContext";
 
 const filterOptions = [
   { key: "all", label: "All Time" },
@@ -20,15 +22,104 @@ const years = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i)
 
 export const GlobalFilterBar: React.FC = () => {
   const { filter, setFilter } = useGlobalFilter();
+  const { clearAllTrades } = useTrades();
+  const { clearAccountingMethodData } = useAccountingMethod();
 
-  // Handler to clear all storage
-  const handleClearAll = () => {
-    if (window.confirm('Are you sure you want to clear ALL app data? This cannot be undone.')) {
-      localStorage.clear();
-      sessionStorage.clear();
-      window.location.reload();
+  // Comprehensive clear all data handler
+  const handleClearAllData = React.useCallback(() => {
+    const confirmed = window.confirm(
+      '⚠️ WARNING: This will permanently delete ALL data including:\n\n' +
+      '• All trades and trade data\n' +
+      '• Portfolio settings and capital changes\n' +
+      '• Custom setups and growth areas\n' +
+      '• All cached and backup data\n' +
+      '• User preferences and settings\n\n' +
+      'This action CANNOT be undone!\n\n' +
+      'Are you absolutely sure you want to continue?'
+    );
+
+    if (confirmed) {
+      const doubleConfirm = window.confirm(
+        '🚨 FINAL CONFIRMATION\n\n' +
+        'You are about to delete ALL application data.\n' +
+        'This includes everything you have entered.\n\n' +
+        'Type "DELETE" in the next prompt to confirm.'
+      );
+
+      if (doubleConfirm) {
+        const finalConfirm = window.prompt(
+          'Type "DELETE" (in capital letters) to confirm deletion of all data:'
+        );
+
+        if (finalConfirm === 'DELETE') {
+          try {
+            console.log('🗑️ Starting comprehensive data clearing...');
+
+            // Clear all trades using the hook function
+            clearAllTrades();
+
+            // Clear accounting method data
+            clearAccountingMethodData();
+
+            // Clear all localStorage data comprehensively
+            const keysToRemove = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key) {
+                keysToRemove.push(key);
+              }
+            }
+
+            // Remove all localStorage keys
+            keysToRemove.forEach(key => {
+              try {
+                localStorage.removeItem(key);
+                console.log(`🗑️ Removed localStorage key: ${key}`);
+              } catch (error) {
+                console.error(`❌ Failed to remove localStorage key ${key}:`, error);
+              }
+            });
+
+            // Clear all sessionStorage data
+            try {
+              sessionStorage.clear();
+              console.log('🗑️ Cleared all sessionStorage data');
+            } catch (error) {
+              console.error('❌ Failed to clear sessionStorage:', error);
+            }
+
+            // Clear any IndexedDB data if present
+            if ('indexedDB' in window) {
+              try {
+                const dbNames = ['trades', 'portfolio', 'settings', 'cache'];
+                dbNames.forEach(dbName => {
+                  const deleteReq = indexedDB.deleteDatabase(dbName);
+                  deleteReq.onsuccess = () => console.log(`🗑️ Deleted IndexedDB: ${dbName}`);
+                  deleteReq.onerror = () => console.log(`⚠️ IndexedDB ${dbName} not found or already deleted`);
+                });
+              } catch (error) {
+                console.error('❌ Error clearing IndexedDB:', error);
+              }
+            }
+
+            console.log('✅ Comprehensive data clearing completed');
+
+            // Show success message and reload
+            alert('✅ All data has been successfully cleared!\n\nThe page will now reload to reset the application.');
+
+            // Force reload to reset all state
+            window.location.reload();
+
+          } catch (error) {
+            console.error('💥 Error during data clearing:', error);
+            alert('❌ An error occurred while clearing data. Please try again or refresh the page manually.');
+          }
+        } else {
+          alert('❌ Deletion cancelled. You must type "DELETE" exactly to confirm.');
+        }
+      }
     }
-  };
+  }, [clearAllTrades, clearAccountingMethodData]);
 
   return (
     <div className="flex items-center gap-4 p-4 border-b border-divider bg-background/80">
@@ -130,18 +221,35 @@ export const GlobalFilterBar: React.FC = () => {
         </div>
       )}
       <div className="flex-1" />
-      <Tooltip content="Clear All Data" placement="bottom">
-        <Button
-          isIconOnly
-          size="sm"
-          variant="bordered"
-          color="danger"
-          onPress={handleClearAll}
-          className="ml-auto"
+      <Dropdown>
+        <DropdownTrigger>
+          <Button
+            isIconOnly
+            size="sm"
+            variant="bordered"
+            className="ml-auto hover:bg-danger/10 transition"
+          >
+            <Icon icon="lucide:settings" className="text-lg" />
+          </Button>
+        </DropdownTrigger>
+        <DropdownMenu
+          aria-label="Settings options"
+          onAction={(key) => {
+            if (key === 'clear-all') {
+              handleClearAllData();
+            }
+          }}
         >
-          <Icon icon="lucide:trash" className="text-lg" />
-        </Button>
-      </Tooltip>
+          <DropdownItem
+            key="clear-all"
+            startContent={<Icon icon="lucide:trash-2" />}
+            className="text-danger"
+            color="danger"
+          >
+            Clear All Data
+          </DropdownItem>
+        </DropdownMenu>
+      </Dropdown>
     </div>
   );
 }; 

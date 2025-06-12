@@ -13,10 +13,12 @@ import { TruePortfolioProvider } from "./utils/TruePortfolioContext";
 import { TruePortfolioSetupManager } from "./components/TruePortfolioSetupManager";
 import { ProfileSettingsModal } from "./components/ProfileSettingsModal";
 import { GlobalFilterProvider, useGlobalFilter } from "./context/GlobalFilterContext";
+import { AccountingMethodProvider } from "./context/AccountingMethodContext";
 import { GlobalFilterBar } from "./components/GlobalFilterBar";
 import { TradeTrackerLogo } from './components/icons/TradeTrackerLogo';
 import { AnimatedBrandName } from './components/AnimatedBrandName';
 import DeepAnalyticsPage from "./pages/DeepAnalyticsPage";
+import { Analytics } from '@vercel/analytics/react';
 // Removed Supabase import - using localStorage only
 
 export default function App() {
@@ -126,8 +128,9 @@ export default function App() {
 
   return (
     <TruePortfolioProvider>
-      <GlobalFilterProvider>
-        <div className="min-h-screen bg-background font-sans antialiased">
+      <AccountingMethodProvider>
+        <GlobalFilterProvider>
+          <div className="min-h-screen bg-background font-sans antialiased">
           {/* Navigation */}
           <header className="sticky top-0 z-40 w-full border-b border-gray-200 dark:border-gray-700 bg-background/80 backdrop-blur-xl backdrop-saturate-150">
             <nav className="px-4 sm:px-6">
@@ -217,6 +220,19 @@ export default function App() {
                         </Link>
                       );
                     })}
+                    {/* Profile Button for Mobile */}
+                    <Button
+                      variant="light"
+                      size="sm"
+                      onPress={() => {
+                        setIsProfileOpen(true);
+                        setIsMobileMenuOpen(false); // Close mobile menu when opening profile
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm font-medium transition-colors rounded-lg text-gray-700 dark:text-gray-300 hover:text-foreground hover:bg-gray-100 dark:hover:bg-gray-800/50 backdrop-blur-sm transition-all duration-300"
+                      startContent={<Icon icon="lucide:user" className="h-4 w-4" />}
+                    >
+                      <span>{userName || 'Profile'}</span>
+                    </Button>
                   </div>
                 </motion.div>
               )}
@@ -263,8 +279,10 @@ export default function App() {
             userName={userName}
             setUserName={setUserName}
           />
-        </div>
-      </GlobalFilterProvider>
+          <Analytics />
+          </div>
+        </GlobalFilterProvider>
+      </AccountingMethodProvider>
     </TruePortfolioProvider>
   );
 }

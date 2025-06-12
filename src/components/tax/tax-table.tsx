@@ -1,10 +1,10 @@
 import React, { useState, useCallback } from "react";
-import { 
-  Table, 
-  TableHeader, 
-  TableColumn, 
-  TableBody, 
-  TableRow, 
+import {
+  Table,
+  TableHeader,
+  TableColumn,
+  TableBody,
+  TableRow,
   TableCell,
   Button,
   Tooltip,
@@ -15,6 +15,8 @@ import { motion } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
 import { useTrades } from "../../hooks/use-trades";
+import { useAccountingMethod } from "../../context/AccountingMethodContext";
+import { getTradesForMonth, calculateTradePL } from "../../utils/accountingUtils";
 
 interface TaxTableProps {
   trades: Trade[];
@@ -208,10 +210,29 @@ const taxData: TaxData[] = [
   }
 ];
 
+// localStorage helpers
+function fetchTaxData() {
+  try {
+    const stored = localStorage.getItem('taxData');
+    return stored ? JSON.parse(stored) : {};
+  } catch (error) {
+    console.error('Error fetching tax data:', error);
+    return {};
+  }
+}
+
+function saveTaxData(taxData: any) {
+  try {
+    localStorage.setItem('taxData', JSON.stringify(taxData));
+  } catch (error) {
+    console.error('localStorage save error:', error);
+  }
+}
+
 // Editable Text Component
 const EditableText: React.FC<{
   value: string | number;
-  onSave: (value: string) => void;
+  onSave: (value: string, eventType: 'enter' | 'blur' | 'escape') => void;
   isEditing: boolean;
   type?: "text" | "number";
   className?: string;
@@ -223,11 +244,21 @@ const EditableText: React.FC<{
   React.useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus();
+      inputRef.current.select();
     }
   }, [isEditing]);
 
   const handleBlur = () => {
-    onSave(editValue);
+    onSave(editValue, 'blur');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      onSave(editValue, 'enter');
+    } else if (e.key === 'Escape') {
+      onSave(value.toString(), 'escape');
+    }
   };
 
   if (!isEditing) {
@@ -250,6 +281,8 @@ const EditableText: React.FC<{
       value={editValue}
       onValueChange={setEditValue}
       onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
+      autoFocus
       size="sm"
       variant="bordered"
       className={`max-w-[120px] ${className}`}
@@ -258,22 +291,43 @@ const EditableText: React.FC<{
         inputWrapper: "h-8 min-h-unit-8"
       }}
       startContent={prefix ? <span className="text-default-400">{prefix}</span> : undefined}
+      min={0}
     />
   );
 };
 
 export const TaxTable: React.FC<TaxTableProps> = ({ trades = [], taxesByMonth, setTaxesByMonth }) => {
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
   const [editingCell, setEditingCell] = useState<{ month: string; value: string } | null>(null);
 
-  // Group trades by month
+  React.useEffect(() => {
+    // Load taxes from localStorage on component mount
+    const allTaxData = fetchTaxData();
+    const currentYear = new Date().getFullYear().toString();
+    const yearTaxData = allTaxData[currentYear] || {};
+    setTaxesByMonth(yearTaxData);
+  }, [setTaxesByMonth]);
+
+  // Helper function to convert full month name to short month name
+  const getShortMonthName = (fullMonth: string): string => {
+    return fullMonth.substring(0, 3);
+  };
+
+  // Group trades by month based on accounting method
   const monthOrder = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const currentYear = new Date().getFullYear();
+
+  // Create monthly map using accounting method
   const monthlyMap: Record<string, Trade[]> = {};
-  trades.forEach(trade => {
-    const d = new Date(trade.date);
-    const month = d.toLocaleString('default', { month: 'long' });
-    if (!monthlyMap[month]) monthlyMap[month] = [];
-    monthlyMap[month].push(trade);
+  monthOrder.forEach(month => {
+    // Convert full month name to short month name for getTradesForMonth
+    const shortMonth = getShortMonthName(month);
+    const monthTrades = getTradesForMonth(trades, shortMonth, currentYear, useCashBasis);
+    if (monthTrades.length > 0) {
+      monthlyMap[month] = monthTrades;
+    }
   });
 
   const formatCurrency = (value: number) => {
@@ -289,45 +343,46 @@ export const TaxTable: React.FC<TaxTableProps> = ({ trades = [], taxesByMonth, s
     setEditingCell({ month, value: value.toString() });
   };
 
-  const handleEditChange = (value: string) => {
+  const handleEditComplete = useCallback((newValueString: string, eventType: 'enter' | 'blur' | 'escape') => {
     if (editingCell) {
-      // Only allow positive numbers
-      const numValue = value.replace(/[^0-9.]/g, '');
-      setEditingCell({ ...editingCell, value: numValue });
-    }
-  };
+      let newValue = parseFloat(newValueString); 
 
-  const handleEditComplete = () => {
-    if (editingCell) {
-      const newValue = parseFloat(editingCell.value);
-      if (!isNaN(newValue) && newValue >= 0) {
-        setTaxesByMonth(prev => ({
+      // If the input is empty or results in NaN, treat it as 0
+      if (isNaN(newValue) || newValueString.trim() === '') {
+        newValue = 0; 
+      }
+
+      // If a negative number is entered, set it to 0
+      if (newValue < 0) {
+        newValue = 0;
+      }
+
+      // No longer need the `if (newValue >= 0)` check here, as newValue is already sanitized to be non-negative
+      setTaxesByMonth(prev => {
+        const updatedTaxes = {
           ...prev,
           [editingCell.month]: newValue
-        }));
-      } else {
-        // Revert to original value if invalid input
-        setTaxesByMonth(prev => ({
-          ...prev,
-          [editingCell.month]: parseFloat(taxData.find(d => d.month === editingCell.month)?.taxes.toString() || '0'),
-        }));
-      }
+        };
+        // Save updated taxes to localStorage
+        const allTaxData = fetchTaxData();
+        const currentYear = new Date().getFullYear().toString();
+        const newAllTaxData = {
+          ...allTaxData,
+          [currentYear]: {
+            ...(allTaxData[currentYear] || {}),
+            [editingCell.month]: newValue
+          }
+        };
+        saveTaxData(newAllTaxData);
+        return updatedTaxes;
+      });
+
+      // Set editingCell to null on any save event (Enter, Blur, or Escape)
       setEditingCell(null);
     }
-  };
+  }, [editingCell, setTaxesByMonth]);
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleEditComplete();
-    } else if (e.key === 'Escape') {
-      setEditingCell(null);
-    }
-  };
 
-  // Helper function to convert full month name to short month name
-  const getShortMonthName = (fullMonth: string): string => {
-    return fullMonth.substring(0, 3);
-  };
 
   const columns = React.useMemo(() => [
     {
@@ -492,21 +547,28 @@ export const TaxTable: React.FC<TaxTableProps> = ({ trades = [], taxesByMonth, s
       </TableHeader>
         <TableBody items={monthOrder.map(month => {
           const monthlyTrades = monthlyMap[month] || [];
-          const grossPL = monthlyTrades.reduce((sum, t) => sum + (t.plRs || 0), 0);
-          const winTrades = monthlyTrades.filter(t => t.plRs > 0);
-          const lossTrades = monthlyTrades.filter(t => t.plRs < 0);
+
+          // Calculate P/L based on accounting method
+          const tradesWithPL = monthlyTrades.map(trade => ({
+            ...trade,
+            accountingPL: calculateTradePL(trade, useCashBasis)
+          }));
+
+          const grossPL = tradesWithPL.reduce((sum, t) => sum + t.accountingPL, 0);
+          const winTrades = tradesWithPL.filter(t => t.accountingPL > 0);
+          const lossTrades = tradesWithPL.filter(t => t.accountingPL < 0);
           const totalTrades = monthlyTrades.length;
-          const winRate = totalTrades > 0 ? `${((winTrades.length / totalTrades) * 100).toFixed(2)}%` : "-";
-          const avgProfit = winTrades.length > 0 ? monthlyTrades.reduce((sum, t) => sum + (t.plRs > 0 ? t.plRs : 0), 0) / winTrades.length : "-";
-          const avgLoss = lossTrades.length > 0 ? monthlyTrades.reduce((sum, t) => sum + (t.plRs < 0 ? t.plRs : 0), 0) / lossTrades.length : "-";
+          const winRate = totalTrades > 0 ? ((winTrades.length / totalTrades) * 100).toFixed(2) + '%' : "-";
+          const avgProfit = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + t.accountingPL, 0) / winTrades.length : "-";
+          const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + t.accountingPL, 0) / lossTrades.length : "-";
           
           const taxes = taxesByMonth[month] || 0;
           const netPL = grossPL - taxes;
-          const taxPercent = grossPL !== 0 ? `${((taxes / grossPL) * 100).toFixed(2)}%` : "0.00%";
+          const taxPercent = grossPL !== 0 ? ((taxes / grossPL) * 100).toFixed(2) + '%' : "0.00%";
           
-          const portfolioSizeForMonth = getPortfolioSize(getShortMonthName(month), new Date().getFullYear());
-          const grossPFImpact = portfolioSizeForMonth > 0 ? `${((grossPL / portfolioSizeForMonth) * 100).toFixed(2)}%` : "0.00%";
-          const netPFImpact = portfolioSizeForMonth > 0 ? `${((netPL / portfolioSizeForMonth) * 100).toFixed(2)}%` : "0.00%";
+          const portfolioSizeForMonth = getPortfolioSize(getShortMonthName(month), new Date().getFullYear(), trades, useCashBasis);
+          const grossPFImpact = portfolioSizeForMonth > 0 ? ((grossPL / portfolioSizeForMonth) * 100).toFixed(2) + '%' : "0.00%";
+          const netPFImpact = portfolioSizeForMonth > 0 ? ((netPL / portfolioSizeForMonth) * 100).toFixed(2) + '%' : "0.00%";
           const returnPercent = grossPFImpact; // Using grossPFImpact for now
 
           // Calculate avg RR based on existing trades (assuming avgGain and avgLoss are available)

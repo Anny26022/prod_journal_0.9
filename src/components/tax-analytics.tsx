@@ -1,9 +1,9 @@
 import React, { useCallback } from "react";
-import { 
-  Card, 
-  CardBody, 
-  CardHeader, 
-  Divider, 
+import {
+  Card,
+  CardBody,
+  CardHeader,
+  Divider,
   Button,
   Tabs,
   Tab,
@@ -27,6 +27,9 @@ import { TaxMetricsCards } from "./tax/tax-metrics-cards";
 import { TaxTable } from "./tax/tax-table";
 import { TaxEditModal } from "./tax/tax-edit-modal";
 import { useTrades } from "../hooks/use-trades";
+import { useAccountingMethod } from "../context/AccountingMethodContext";
+import { useGlobalFilter } from "../context/GlobalFilterContext";
+import { calculateTradePL } from "../utils/accountingUtils";
 // Removed Supabase import - using localStorage only
 
 // Editable Text Component
@@ -103,8 +106,13 @@ function saveTaxData(taxData: any) {
 }
 
 export const TaxAnalytics: React.FC = () => {
-  const { trades } = useTrades();
-  // Get all unique years from trades
+  const { trades } = useTrades(); // This now returns filtered trades based on global filter and accounting method
+  const { accountingMethod } = useAccountingMethod();
+  const { filter } = useGlobalFilter();
+  const useCashBasis = accountingMethod === 'cash';
+
+  // Note: trades are now pre-filtered by global filter and accounting method from useTrades()
+  // Get all unique years from filtered trades for year selector (if needed for additional filtering)
   const tradeYears = Array.from(new Set(trades.map(t => new Date(t.date).getFullYear()))).sort((a, b) => b - a);
   const defaultYear = tradeYears.length > 0 ? String(tradeYears[0]) : String(new Date().getFullYear());
   const [selectedYear, setSelectedYear] = React.useState(defaultYear);
@@ -188,7 +196,7 @@ export const TaxAnalytics: React.FC = () => {
   const drawdown = maxDrawdown;
   const maxCummPF = cummPfs.length ? Math.max(...cummPfs) : 0;
   const minCummPF = cummPfs.length ? Math.min(...cummPfs) : 0;
-  const totalGrossPL = tradesForYear.reduce((sum, t) => sum + (t.plRs || 0), 0);
+  const totalGrossPL = tradesForYear.reduce((sum, t) => sum + calculateTradePL(t, useCashBasis), 0);
   const totalTaxes = monthOrder.reduce((sum, m) => sum + (taxesByMonth[m] || 0), 0);
   const totalNetPL = totalGrossPL - totalTaxes;
   const formatCurrency = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
@@ -205,8 +213,8 @@ export const TaxAnalytics: React.FC = () => {
         <div className="flex items-center gap-3">
           <Dropdown>
             <DropdownTrigger>
-              <Button 
-                variant="light" 
+              <Button
+                variant="light"
                 endContent={<Icon icon="lucide:chevron-down" className="text-sm" />}
                 size="sm"
                 radius="full"
@@ -215,8 +223,8 @@ export const TaxAnalytics: React.FC = () => {
                 {selectedYear}
               </Button>
             </DropdownTrigger>
-            <DropdownMenu 
-              aria-label="Year selection" 
+            <DropdownMenu
+              aria-label="Year selection"
               selectionMode="single"
               selectedKeys={[selectedYear]}
               onSelectionChange={(keys) => {
@@ -275,7 +283,6 @@ export const TaxAnalytics: React.FC = () => {
           </CardHeader>
           <Divider />
           <CardBody className="p-6 space-y-8">
-            {/* Performance Metrics */}
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
@@ -403,7 +410,6 @@ export const TaxAnalytics: React.FC = () => {
 
             <Divider className="my-4" />
 
-            {/* Financial Metrics */}
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">

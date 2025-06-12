@@ -13,11 +13,9 @@ import {
 } from "recharts";
 import { useTrades } from "../../hooks/use-trades";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
+import { useAccountingMethod } from "../../context/AccountingMethodContext";
 
-function getMonthShort(dateStr: string) {
-  const d = new Date(dateStr);
-  return d.toLocaleString('default', { month: 'short' });
-}
+
 
 const formatCurrency = (value: number) => {
   return new Intl.NumberFormat("en-IN", {
@@ -34,33 +32,41 @@ interface TaxSummaryChartProps {
 
 export const TaxSummaryChart: React.FC<TaxSummaryChartProps> = ({ taxesByMonth }) => {
   const { trades } = useTrades();
-  const { getPortfolioSize } = useTruePortfolioWithTrades(trades);
-  
-  // Group trades by month
-  const monthlyMap: Record<string, { grossPL: number, year: number }> = {};
-  trades.forEach(trade => {
-    const d = new Date(trade.date);
-    const key = getMonthShort(trade.date);
-    if (!monthlyMap[key]) monthlyMap[key] = { grossPL: 0, year: d.getFullYear() };
-    monthlyMap[key].grossPL += trade.plRs || 0;
-    monthlyMap[key].year = d.getFullYear();
-  });
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
+  const { getPortfolioSize, getAllMonthlyTruePortfolios } = useTruePortfolioWithTrades(trades);
 
-  // Output months in calendar order
-  const monthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const chartData = monthOrder.map(month => {
+  // Use the EXACT same logic as Monthly Performance table
+  const currentYear = new Date().getFullYear();
+  const shortMonthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  // Get all monthly portfolio data (same as Monthly Performance table)
+  const monthlyPortfolios = getAllMonthlyTruePortfolios(trades, useCashBasis);
+  const filteredMonthlyPortfolios = monthlyPortfolios.filter(mp => mp.year === currentYear);
+
+  // Output months in calendar order - use same logic as Monthly Performance table
+  const chartData = shortMonthOrder.map(month => {
     const longMonth = {
       Jan: "January", Feb: "February", Mar: "March", Apr: "April",
       May: "May", Jun: "June", Jul: "July", Aug: "August",
       Sep: "September", Oct: "October", Nov: "November", Dec: "December"
     }[month];
-    
-    const grossPL = monthlyMap[month]?.grossPL || 0;
+
+    // Find corresponding monthly portfolio data (EXACT same logic as Monthly Performance table)
+    const monthPortfolio = filteredMonthlyPortfolios.find(mp => mp.month === month) || {
+      month,
+      year: currentYear,
+      startingCapital: 0,
+      capitalChanges: 0,
+      pl: 0,
+      finalCapital: 0
+    };
+    const grossPL = monthPortfolio.pl; // This uses the correct accounting method
     const taxes = taxesByMonth[longMonth || ""] || 0;
     const netPL = grossPL - taxes;
-    const year = monthlyMap[month]?.year || new Date().getFullYear();
-    const portfolioSize = getPortfolioSize(month, year);
+    const portfolioSize = getPortfolioSize(month, currentYear, trades, useCashBasis);
     const plPercent = portfolioSize > 0 ? (grossPL / portfolioSize) * 100 : 0;
+
     return {
       month,
       grossPL,

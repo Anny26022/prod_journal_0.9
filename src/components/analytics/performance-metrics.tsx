@@ -6,6 +6,7 @@ import { metricVariants, listItemVariants } from "../../utils/animations";
 import { Trade } from "../../types/trade";
 import { calcOpenHeat, calcWeightedRewardRisk } from "../../utils/tradeCalculations";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
+import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
 
 interface MetricProps {
   label: string;
@@ -153,34 +154,28 @@ interface PerformanceMetricsProps {
 
 export const PerformanceMetrics: React.FC<PerformanceMetricsProps> = ({ trades, isEditing = false }) => {
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
-  // Calculate metrics from trades
-  const totalTrades = trades.length;
-  const winTrades = trades.filter(t => t.plRs > 0);
-  const lossTrades = trades.filter(t => t.plRs < 0);
-  const winRate = totalTrades > 0 ? (winTrades.length / totalTrades) * 100 : 0;
-  const avgPosMove = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / winTrades.length : 0;
-  const avgNegMove = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / lossTrades.length : 0;
-  const avgPositionSize = totalTrades > 0 ? trades.reduce((sum, t) => sum + (t.allocation || 0), 0) / totalTrades : 0;
-  const avgHoldingDays = totalTrades > 0 ? trades.reduce((sum, t) => sum + (t.holdingDays || 0), 0) / totalTrades : 0;
-  const planFollowed = totalTrades > 0 ? (trades.filter(t => t.planFollowed).length / totalTrades) * 100 : 0;
-  const avgR = totalTrades > 0 ? trades.reduce((sum, t) => sum + calcWeightedRewardRisk(t), 0) / totalTrades : 0;
-  const openPositions = trades.filter(t => t.positionStatus === 'Open').length;
+  const { totalTrades, winRate, avgPosMove, avgNegMove, avgPositionSize, avgHoldingDays, avgR, planFollowed, openPositions } = useAccountingCalculations(trades);
+  const { displayName } = useAccountingMethodDisplay();
+
+  // Calculate remaining metrics not in shared hook
   const cashPercentage = 100 - trades.reduce((sum, t) => sum + (t.allocation || 0), 0);
   const openHeat = calcOpenHeat(trades, portfolioSize, getPortfolioSize);
 
   return (
-    <motion.div 
-      className="grid grid-cols-2 gap-4"
-      initial="initial"
-      animate="animate"
-      variants={{
-        animate: {
-          transition: {
-            staggerChildren: 0.05
+    <div className="space-y-4">
+
+      <motion.div
+        className="grid grid-cols-2 gap-4"
+        initial="initial"
+        animate="animate"
+        variants={{
+          animate: {
+            transition: {
+              staggerChildren: 0.05
+            }
           }
-        }
-      }}
-    >
+        }}
+      >
       <Metric 
         label="Total Trades" 
         value={totalTrades}
@@ -265,6 +260,7 @@ export const PerformanceMetrics: React.FC<PerformanceMetricsProps> = ({ trades, 
         isEditing={isEditing}
         index={10}
       />
-    </motion.div>
+      </motion.div>
+    </div>
   );
 };

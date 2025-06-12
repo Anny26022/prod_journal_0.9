@@ -42,6 +42,7 @@ import {
 import { useTruePortfolioWithTrades } from "../hooks/use-true-portfolio-with-trades";
 import { useTrades } from "../hooks/use-trades";
 import { validateTrade, TradeIssue } from "../utils/tradeValidations";
+import * as Papa from "papaparse"; // Centralized import
 
   // Debounce helper
   const useDebounce = <T,>(value: T, delay: number): T => {
@@ -261,25 +262,59 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
     return nums.length > 0 ? String(Math.max(...nums) + 1) : "1";
   }, [trades]);
 
-  // Load formData from sessionStorage if present
+  // Enhanced data loading with recovery mechanism
   const [formData, setFormData] = React.useState<TradeModalFormData>(() => {
     if (typeof window !== 'undefined') {
+      // First try sessionStorage
       const saved = sessionStorage.getItem(sessionKey + '_formData');
       if (saved) {
         try {
-          return JSON.parse(saved);
-        } catch {}
+          const parsedData = JSON.parse(saved);
+          console.log('📂 Loaded form data from sessionStorage');
+          return parsedData;
+        } catch (error) {
+          console.warn('⚠️ Failed to parse sessionStorage data:', error);
+        }
+      }
+
+      // If sessionStorage fails, try to recover from localStorage backup
+      try {
+        const allKeys = Object.keys(localStorage);
+        const backupKeys = allKeys.filter(key => key.startsWith(`tradeBackup_${sessionKey}_`))
+          .sort((a, b) => {
+            const timestampA = parseInt(a.split('_').pop() || '0');
+            const timestampB = parseInt(b.split('_').pop() || '0');
+            return timestampB - timestampA; // Most recent first
+          });
+
+        if (backupKeys.length > 0) {
+          const latestBackup = localStorage.getItem(backupKeys[0]);
+          if (latestBackup) {
+            const backup = JSON.parse(latestBackup);
+            console.log('🔄 Recovered form data from backup:', backup.timestamp);
+            return backup.formData;
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to recover from backup:', error);
       }
     }
+
+    // Fallback to default initialization
     if (trade) {
+      console.log('📝 Initializing with existing trade data');
       return { ...defaultTrade, ...trade, slPercent: (trade as any).slPercent || 0 };
     } else if (mode === 'add') {
+      console.log('➕ Initializing new trade form');
       return { ...defaultTrade, tradeNo: nextTradeNo };
     } else {
+      console.log('🔧 Initializing with default trade data');
       return defaultTrade;
     }
   });
   const [isDirty, setIsDirty] = React.useState<boolean>(false);
+  const [isAutoSaving, setIsAutoSaving] = React.useState<boolean>(false);
+  const [lastSaved, setLastSaved] = React.useState<Date | null>(null);
   const [activeTab, setActiveTab] = React.useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = sessionStorage.getItem(sessionKey + '_activeTab');
@@ -288,21 +323,62 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
     return 'basic';
   });
 
-  // Save formData and tab to sessionStorage on change
+  // Enhanced auto-save with backup mechanism and visual feedback
   React.useEffect(() => {
-    sessionStorage.setItem(sessionKey + '_formData', JSON.stringify(formData));
+    const saveData = async () => {
+      setIsAutoSaving(true);
+      try {
+        // Save to sessionStorage for temporary persistence
+        sessionStorage.setItem(sessionKey + '_formData', JSON.stringify(formData));
+
+        // Also save to localStorage as backup with timestamp
+        const backupKey = `tradeBackup_${sessionKey}_${Date.now()}`;
+        localStorage.setItem(backupKey, JSON.stringify({
+          formData,
+          timestamp: Date.now(),
+          sessionKey
+        }));
+
+        // Clean old backups (keep only last 5)
+        const allKeys = Object.keys(localStorage);
+        const backupKeys = allKeys.filter(key => key.startsWith(`tradeBackup_${sessionKey}_`))
+          .sort((a, b) => {
+            const timestampA = parseInt(a.split('_').pop() || '0');
+            const timestampB = parseInt(b.split('_').pop() || '0');
+            return timestampB - timestampA; // Sort descending
+          });
+
+        // Remove old backups, keep only 5 most recent
+        backupKeys.slice(5).forEach(key => localStorage.removeItem(key));
+
+        setLastSaved(new Date());
+        console.log('💾 Auto-saved form data and created backup');
+      } catch (error) {
+        console.error('❌ Error auto-saving form data:', error);
+      } finally {
+        setIsAutoSaving(false);
+      }
+    };
+
+    // Debounce auto-save to prevent excessive saves
+    const timer = setTimeout(saveData, 1000);
+    return () => clearTimeout(timer);
   }, [formData, sessionKey]);
+
   React.useEffect(() => {
     sessionStorage.setItem(sessionKey + '_activeTab', activeTab);
   }, [activeTab, sessionKey]);
 
-  // Clear sessionStorage on close
+  // Clear sessionStorage on close - but only after successful save
+  const [shouldClearSession, setShouldClearSession] = React.useState(false);
+
   React.useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen && shouldClearSession) {
       sessionStorage.removeItem(sessionKey + '_formData');
       sessionStorage.removeItem(sessionKey + '_activeTab');
+      setShouldClearSession(false);
     }
-  }, [isOpen, sessionKey]);
+  }, [isOpen, sessionKey, shouldClearSession]);
 
   // Define which fields should be calculated and read-only
   const calculatedFieldNames = React.useMemo(() => [
@@ -424,24 +500,45 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
     setValidationIssues(issues);
   }, [formData]);
 
-  // Modify handleSubmit to check for errors
+  // Enhanced handleSubmit with better error handling and data persistence
   const handleSubmit = React.useCallback(() => {
+    console.log('🔄 Starting trade save process...');
+    console.log('📊 Current formData:', formData);
+
     const issues = validateTrade(formData);
     setValidationIssues(issues);
-    
-    // If there are any errors (not just warnings), prevent save
+
+    // Show validation errors to user but allow save with warnings
     if (issues.some(issue => issue.type === 'error')) {
-      return; // Don't save if there are errors
+      console.error('❌ Validation errors found:', issues.filter(i => i.type === 'error'));
+      alert(`Cannot save trade due to validation errors:\n${issues.filter(i => i.type === 'error').map(i => i.message).join('\n')}`);
+      return;
     }
 
-    calculateValues();
-    const newTrade = {
-      ...debouncedFormData,
-      id: debouncedFormData.id || generateId()
-    };
-    const recalculated = recalculateTrade(newTrade, portfolioSize, getPortfolioSize);
-    onSave(recalculated);
-  }, [debouncedFormData, calculateValues, onSave, portfolioSize, formData, getPortfolioSize]);
+    // Show warnings but continue with save
+    if (issues.some(issue => issue.type === 'warning')) {
+      console.warn('⚠️ Validation warnings found:', issues.filter(i => i.type === 'warning'));
+    }
+
+    try {
+      // Use current formData instead of debounced to ensure latest changes are saved
+      const newTrade = {
+        ...formData, // Use current formData instead of debouncedFormData
+        id: formData.id || generateId()
+      };
+
+      console.log('💾 Saving trade with data:', newTrade);
+      const recalculated = recalculateTrade(newTrade, portfolioSize, getPortfolioSize);
+      console.log('🧮 Recalculated trade:', recalculated);
+
+      onSave(recalculated);
+      setShouldClearSession(true); // Mark for session clearing after successful save
+      console.log('✅ Trade saved successfully');
+    } catch (error) {
+      console.error('💥 Error saving trade:', error);
+      alert('Error saving trade. Please try again.');
+    }
+  }, [formData, onSave, portfolioSize, getPortfolioSize]);
 
   const modalMotionProps = React.useMemo(() => ({
         variants: {
@@ -676,6 +773,26 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
             ))}
           </Select>
         );
+      case "text": // Handle text inputs specifically
+        if (field.name === "name") {
+          return (
+            <NameCell
+              key={field.name}
+              value={formData.name || ""}
+              onSave={(value) => handleChange("name", value)}
+            />
+          );
+        }
+        return (
+          <Input
+            key={field.name}
+            label={field.label}
+            value={formData[field.name] || ""}
+            onValueChange={(value) => handleChange(field.name, value)}
+            variant="bordered"
+            className="transform-gpu"
+          />
+        );
       default:
         return (
           <Input
@@ -717,6 +834,284 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
     </div>
   );
 
+  const csvUrl = '/name_sector_industry.csv';
+
+  interface NameCellProps {
+    value: string;
+    onSave: (value: string) => void;
+  }
+
+  const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, onSave }) {
+    const [isEditing, setIsEditing] = React.useState(false);
+    const [editValue, setEditValue] = React.useState(value);
+    const [showDropdown, setShowDropdown] = React.useState(false);
+    const [filtered, setFiltered] = React.useState<string[]>([]);
+    const [selectedIndex, setSelectedIndex] = React.useState(-1);
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    const dropdownRef = React.useRef<HTMLDivElement>(null);
+    const [position, setPosition] = React.useState({
+      top: 0,
+      left: 0,
+      width: 0,
+      height: 0
+    });
+
+    // Move stockNames state and effect here
+    const [stockNames, setStockNames] = React.useState<string[]>([]);
+    React.useEffect(() => {
+      async function loadStockNames() {
+        const response = await fetch(csvUrl);
+        const csvText = await response.text();
+        const Papa = (await import('papaparse')).default;
+        Papa.parse(csvText, {
+          header: true,
+          complete: (results) => {
+            const names = (results.data as any[]).map(row => row['Stock Name']).filter(Boolean);
+            setStockNames(names);
+          }
+        });
+      }
+      loadStockNames();
+    }, []);
+
+    // Function to find closest matching stock name
+    const findClosestMatch = (input: string): string | null => {
+      if (!input || !stockNames.length) return null;
+      
+      const inputLower = input.toLowerCase();
+      let bestMatch = null;
+      let bestScore = 0;
+
+      // First try exact prefix match
+      const exactPrefixMatch = stockNames.find(name => 
+        name.toLowerCase().startsWith(inputLower)
+      );
+      if (exactPrefixMatch) return exactPrefixMatch;
+
+      // Then try contains match
+      const containsMatch = stockNames.find(name => 
+        name.toLowerCase().includes(inputLower)
+      );
+      if (containsMatch) return containsMatch;
+
+      // Finally try fuzzy match
+      for (const name of stockNames) {
+        const nameLower = name.toLowerCase();
+        let score = 0;
+        let inputIndex = 0;
+
+        // Calculate similarity score
+        for (let i = 0; i < nameLower.length && inputIndex < inputLower.length; i++) {
+          if (nameLower[i] === inputLower[inputIndex]) {
+            score++;
+            inputIndex++;
+          }
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = name;
+        }
+      }
+
+      // Only return match if it's reasonably similar
+      return bestScore > (inputLower.length / 2) ? bestMatch : null;
+    };
+
+    React.useEffect(() => {
+      if (isEditing && editValue) {
+        const matches = stockNames.filter(n => 
+          n.toLowerCase().includes(editValue.toLowerCase())
+        );
+        setFiltered(matches.slice(0, 10));
+        setShowDropdown(matches.length > 0);
+        setSelectedIndex(-1);
+
+        // Update position when editing starts
+        if (inputRef.current) {
+          const rect = inputRef.current.getBoundingClientRect();
+          setPosition({
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height
+          });
+        }
+      } else {
+        setShowDropdown(false);
+      }
+    }, [editValue, isEditing, stockNames]);
+
+    // Add a resize listener to update position dynamically
+    React.useEffect(() => {
+      const handleResize = () => {
+        if (isEditing && inputRef.current) {
+          const rect = inputRef.current.getBoundingClientRect();
+          setPosition({
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height
+          });
+        }
+      };
+
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }, [isEditing]);
+
+    const handleSave = (val?: string) => {
+      const finalValue = val ?? editValue;
+      if (finalValue.trim()) {
+        // Check if the value exists in stockNames
+        const exactMatch = stockNames.find(
+          name => name.toLowerCase() === finalValue.toLowerCase()
+        );
+        
+        if (exactMatch) {
+          onSave(exactMatch); // Use the exact case from database
+        } else {
+          // Try to find closest match
+          const closestMatch = findClosestMatch(finalValue);
+          if (closestMatch) {
+            const confirmed = window.confirm(
+              `"${finalValue}" not found. Did you mean "${closestMatch}"?`
+            );
+            if (confirmed) {
+              onSave(closestMatch);
+            } else {
+              // Revert to previous value if user declines suggestion
+               setEditValue(value); 
+            }
+          } else {
+             const addNew = window.confirm(`"${finalValue}" is not a valid stock name. Do you want to add it?`);
+             if(addNew){
+              onSave(finalValue.toUpperCase());
+             } else {
+              setEditValue(value); // Revert to previous value
+             }
+          }
+        }
+      }
+      setIsEditing(false);
+      setShowDropdown(false);
+      setSelectedIndex(-1);
+    };
+
+    // Scroll selected item into view
+    React.useEffect(() => {
+      if (selectedIndex >= 0 && dropdownRef.current) {
+        const selectedElement = document.getElementById(`stock-suggestion-${selectedIndex}`);
+        if (selectedElement) {
+          selectedElement.scrollIntoView({ 
+            block: 'nearest',
+            behavior: 'smooth'
+          });
+        }
+      }
+    }, [selectedIndex]);
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (!showDropdown) return;
+
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          setSelectedIndex(prev => {
+            const next = prev + 1;
+            return next >= filtered.length ? 0 : next;
+          });
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          setSelectedIndex(prev => {
+            const next = prev - 1;
+            return next < 0 ? filtered.length - 1 : next;
+          });
+          break;
+        case 'Enter':
+          e.preventDefault();
+          if (selectedIndex >= 0) {
+            handleSave(filtered[selectedIndex]);
+          } else if (filtered.length === 1) {
+            handleSave(filtered[0]);
+          } else {
+            handleSave();
+          }
+          break;
+        case 'Escape':
+          e.preventDefault();
+          setShowDropdown(false);
+          setSelectedIndex(-1);
+          break;
+        case 'Tab':
+          if (selectedIndex >= 0) {
+            e.preventDefault();
+            handleSave(filtered[selectedIndex]);
+          }
+          break;
+      }
+    };
+
+    if (isEditing) {
+      return (
+        <div className="relative min-w-[220px]">
+          <input
+            ref={inputRef}
+            type="text"
+            className="w-full min-w-[220px] px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded focus:outline-none focus:ring-2 focus:ring-primary"
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            onBlur={() => setTimeout(() => handleSave(), 100)}
+            onKeyDown={handleKeyDown}
+            autoFocus
+          />
+          {showDropdown && (
+            <div
+              ref={dropdownRef}
+              style={{ 
+                position: 'fixed',
+                top: position.top + position.height,
+                left: position.left,
+                width: position.width,
+              }}
+              className="z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow max-h-48 overflow-y-auto overflow-x-auto"
+              role="listbox"
+              tabIndex={-1}
+            >
+              {filtered.map((name, i) => (
+                <div
+                  key={name}
+                  id={`stock-suggestion-${i}`}
+                  role="option"
+                  aria-selected={i === selectedIndex}
+                  className={`px-3 py-1.5 text-sm cursor-pointer whitespace-nowrap ${
+                    i === selectedIndex
+                      ? 'bg-blue-100 dark:bg-blue-900'
+                      : 'hover:bg-blue-50 dark:hover:bg-blue-800'
+                  }`}
+                  onMouseDown={() => handleSave(name)}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                >
+                  {name}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div 
+        className="px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors cursor-text"
+        onClick={() => setIsEditing(true)}
+      >
+        {value || <span className="text-gray-400">Stock name</span>}
+      </div>
+    );
+  });
+
   return (
     <Modal 
       isOpen={isOpen} 
@@ -732,15 +1127,15 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
       }}
       backdrop="blur"
     >
-      <ModalContent className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-2xl border border-gray-200 dark:border-gray-700 shadow-2xl max-h-[85vh] w-[95vw] max-w-md overflow-hidden">
+      <ModalContent className="bg-white/95 dark:bg-gray-900/95 backdrop-blur-2xl border border-gray-200 dark:border-gray-700 shadow-2xl max-h-[85vh] w-[95vw] max-w-md z-[9999]">
         {(onClose) => (
           <>
             <ModalHeader className="flex flex-col gap-1 border-b border-gray-200 dark:border-gray-700 bg-white/80 dark:bg-gray-900/80">
               <div className="flex justify-between items-center w-full">
-                <Tabs 
+                <Tabs
                   selectedKey={activeTab}
                   onSelectionChange={(key) => setActiveTab(key as string)}
-                  aria-label="Options" 
+                  aria-label="Options"
                   color="primary"
                   size="sm"
                   classNames={{
@@ -752,6 +1147,21 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
                   <Tab key="basic" title="Basic" />
                   <Tab key="advanced" title="Advanced" />
                 </Tabs>
+
+                {/* Auto-save indicator */}
+                <div className="flex items-center gap-2 text-xs text-foreground-500">
+                  {isAutoSaving ? (
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      <span>Saving...</span>
+                    </div>
+                  ) : lastSaved ? (
+                    <div className="flex items-center gap-1">
+                      <Icon icon="lucide:check-circle" className="w-3 h-3 text-success" />
+                      <span>Saved {lastSaved.toLocaleTimeString()}</span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </ModalHeader>
             <Divider />
@@ -866,8 +1276,7 @@ import { validateTrade, TradeIssue } from "../utils/tradeValidations";
                   color="primary" 
                   onPress={handleSubmit}
                   isDisabled={validationIssues.some(issue => issue.type === 'error')}
-                  className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md shadow-blue-500/20 h-8 min-w-24 text-sm"
-                  className="min-w-8 w-8 h-8 p-0 flex items-center justify-center bg-gray-800 hover:bg-gray-900 text-white shadow-sm rounded-full"
+                  className="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md shadow-blue-500/20 h-8 min-w-24 text-sm min-w-8 w-8 h-8 p-0 flex items-center justify-center bg-gray-800 hover:bg-gray-900 text-white shadow-sm rounded-full"
                   isIconOnly
                 >
                   <Icon 

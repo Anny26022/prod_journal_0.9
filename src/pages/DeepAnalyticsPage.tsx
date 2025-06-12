@@ -12,7 +12,9 @@ import { Accordion, AccordionItem } from "@heroui/react";
 import PnLDistributionCharts from '../components/analytics/PnLDistributionCharts';
 import TradeHeatmap from '../components/analytics/TradeHeatmap';
 import { useGlobalFilter } from '../context/GlobalFilterContext';
-import { 
+import { useAccountingMethod } from '../context/AccountingMethodContext';
+import { calculateTradePL, getTradeDateForAccounting } from '../utils/accountingUtils';
+import {
   getUniqueSortedDates,
   calculateDailyPortfolioValues,
   calculateDailyReturns,
@@ -51,6 +53,8 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
     const { trades, isLoading } = useTrades();
     const { portfolioSize, capitalChanges } = useTruePortfolioWithTrades(trades);
     const { filter } = useGlobalFilter();
+    const { accountingMethod } = useAccountingMethod();
+    const useCashBasis = accountingMethod === 'cash';
     const [mappingLoaded, setMappingLoaded] = React.useState(false);
 
     // Load industry/sector mapping on mount
@@ -158,10 +162,17 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
         const setupStats = Object.entries(tradesBySetup).map(([setupName, setupTrades]) => {
             const totalTrades = setupTrades.length;
-            const winningTrades = setupTrades.filter(t => t.plRs > 0).length;
+
+            // Calculate P/L based on accounting method
+            const tradesWithAccountingPL = setupTrades.map(trade => ({
+                ...trade,
+                accountingPL: calculateTradePL(trade, useCashBasis)
+            }));
+
+            const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0).length;
             const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
             const totalPfImpact = setupTrades.reduce((sum, trade) => sum + trade.pfImpact, 0);
-            
+
         return {
                 id: setupName,
                 name: setupName,
@@ -173,7 +184,7 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
         // Sort by total PF impact to show most impactful setups first
         return setupStats.sort((a, b) => b.totalPfImpact - a.totalPfImpact);
-    }, [trades]);
+    }, [trades, useCashBasis]);
 
     // --- Calculations for Deep Analytics --- //
     const analytics = useMemo(() => {
@@ -209,13 +220,19 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
             };
         }
 
-        const winningTrades = closedTrades.filter(trade => trade.plRs > 0);
-        const losingTrades = closedTrades.filter(trade => trade.plRs < 0);
+        // Calculate P/L based on accounting method
+        const tradesWithAccountingPL = closedTrades.map(trade => ({
+            ...trade,
+            accountingPL: calculateTradePL(trade, useCashBasis)
+        }));
+
+        const winningTrades = tradesWithAccountingPL.filter(trade => trade.accountingPL > 0);
+        const losingTrades = tradesWithAccountingPL.filter(trade => trade.accountingPL < 0);
         const totalWinningTrades = winningTrades.length;
         const totalLosingTrades = losingTrades.length;
 
-        // Calculate total P&L and total trading days
-        const totalPnL = closedTrades.reduce((sum, trade) => sum + trade.plRs, 0);
+        // Calculate total P&L and total trading days using accounting method
+        const totalPnL = tradesWithAccountingPL.reduce((sum, trade) => sum + trade.accountingPL, 0);
         const uniqueTradingDays = new Set(closedTrades.map(trade => trade.date.split('T')[0])).size;
         const avgPnLPerDay = uniqueTradingDays > 0 ? totalPnL / uniqueTradingDays : 0;
 
@@ -236,9 +253,9 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         // Profit Factor (using Total PF Impact)
         const profitFactor = totalAbsoluteNegativePfImpact > 0 ? totalPositivePfImpact / totalAbsoluteNegativePfImpact : totalPositivePfImpact > 0 ? Infinity : 0; // Handle division by zero
 
-        // Recalculate Avg Win/Loss and Top Win/Loss using plRs (these are still useful in absolute terms)
-        const totalProfit = winningTrades.reduce((sum, trade) => sum + trade.plRs, 0);
-        const totalLoss = losingTrades.reduce((sum, trade) => sum + Math.abs(trade.plRs), 0); // Use absolute for total loss
+        // Calculate Avg Win/Loss and Top Win/Loss using accounting method
+        const totalProfit = winningTrades.reduce((sum, trade) => sum + trade.accountingPL, 0);
+        const totalLoss = losingTrades.reduce((sum, trade) => sum + Math.abs(trade.accountingPL), 0); // Use absolute for total loss
 
         const avgWin = totalWinningTrades > 0 ? totalProfit / totalWinningTrades : 0;
         const avgLoss = totalLosingTrades > 0 ? totalLoss / totalLosingTrades : 0; // This will be a positive value
@@ -246,34 +263,71 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         const avgWinHold = totalWinningTrades > 0 ? winningTrades.reduce((sum, trade) => sum + trade.holdingDays, 0) / totalWinningTrades : 0;
         const avgLossHold = totalLosingTrades > 0 ? losingTrades.reduce((sum, trade) => sum + trade.holdingDays, 0) / totalLosingTrades : 0;
 
-        const topWin = totalWinningTrades > 0 ? Math.max(...winningTrades.map(trade => trade.plRs)) : 0;
-        const topLoss = totalLosingTrades > 0 ? Math.min(...losingTrades.map(trade => trade.plRs)) : 0; // Will be a negative value
+        const topWin = totalWinningTrades > 0 ? Math.max(...winningTrades.map(trade => trade.accountingPL)) : 0;
+        const topLoss = totalLosingTrades > 0 ? Math.min(...losingTrades.map(trade => trade.accountingPL)) : 0; // Will be a negative value
 
-        // Calculate Win/Loss Streaks (remains based on plRs)
+        // Calculate Win/Loss Streaks based on accounting method
         let currentWinStreak = 0;
         let maxWinStreak = 0;
         let currentLossStreak = 0;
         let maxLossStreak = 0;
 
-        // Iterate through trades in chronological order to calculate streaks
-        const sortedTradesByDate = [...trades].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        // Sort trades chronologically based on accounting method
+        let sortedTradesForStreaks;
+        if (useCashBasis) {
+            // For cash basis, we need to create entries for each exit and sort by exit date
+            const exitEntries: Array<{ trade: any; accountingPL: number; exitDate: string }> = [];
 
-        for (const trade of sortedTradesByDate) {
-            if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') { // Only consider closed or partial trades for streaks
-                 if (trade.plRs > 0) {
-                    currentWinStreak++;
-                    maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
-                    currentLossStreak = 0;
-                } else if (trade.plRs < 0) {
-                    currentLossStreak++;
-                    maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
-                    currentWinStreak = 0;
-                } else { // breakeven or zero P/L
-                     maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
-                     maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
-                     currentWinStreak = 0;
-                     currentLossStreak = 0;
+            closedTrades.forEach(trade => {
+                if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+                    const exits = [
+                        { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
+                        { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
+                        { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
+                    ].filter(exit => exit.date && exit.qty > 0 && exit.price > 0);
+
+                    exits.forEach(exit => {
+                        const partialPL = calculateTradePL({
+                            ...trade,
+                            _cashBasisExit: {
+                                date: exit.date,
+                                qty: exit.qty,
+                                price: exit.price
+                            }
+                        }, true);
+
+                        exitEntries.push({
+                            trade,
+                            accountingPL: partialPL,
+                            exitDate: exit.date
+                        });
+                    });
                 }
+            });
+
+            sortedTradesForStreaks = exitEntries.sort((a, b) => new Date(a.exitDate).getTime() - new Date(b.exitDate).getTime());
+        } else {
+            // For accrual basis, sort by entry date
+            sortedTradesForStreaks = tradesWithAccountingPL
+                .filter(trade => trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial')
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .map(trade => ({ trade, accountingPL: trade.accountingPL, exitDate: trade.date }));
+        }
+
+        for (const entry of sortedTradesForStreaks) {
+            if (entry.accountingPL > 0) {
+                currentWinStreak++;
+                maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
+                currentLossStreak = 0;
+            } else if (entry.accountingPL < 0) {
+                currentLossStreak++;
+                maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+                currentWinStreak = 0;
+            } else { // breakeven or zero P/L
+                maxWinStreak = Math.max(maxWinStreak, currentWinStreak);
+                maxLossStreak = Math.max(maxLossStreak, currentLossStreak);
+                currentWinStreak = 0;
+                currentLossStreak = 0;
             }
         }
 
@@ -287,13 +341,17 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         const dailyReturnsMap = calculateDailyReturns(dailyPortfolioValues);
         const dailyReturnsArray = Array.from(dailyReturnsMap.values());
 
-        // Define risk-free rate (e.g., 5% annually, convert to daily)
+        // Define risk-free rate (e.g., 5% annually)
         const annualRiskFreeRate = 0.05; // 5%
-        const dailyRiskFreeRate = Math.pow(1 + annualRiskFreeRate, 1/252) - 1; // Assuming 252 trading days
+        const dailyRiskFreeRate = Math.pow(1 + annualRiskFreeRate, 1/252) - 1; // Convert to daily for comparison
 
-        // Calculate annualized average return (from daily returns)
-        const averageDailyReturn = dailyReturnsArray.length > 0 ? dailyReturnsArray.reduce((sum, r) => sum + r, 0) / dailyReturnsArray.length : 0;
-        const annualizedAverageReturn = Math.pow(1 + averageDailyReturn, 252) - 1; // Annualize daily avg return
+        // Calculate annualized average return (more robust approach)
+        let annualizedAverageReturn = 0;
+        if (dailyReturnsArray.length > 0) {
+            const averageDailyReturn = dailyReturnsArray.reduce((sum, r) => sum + r, 0) / dailyReturnsArray.length;
+            // Use simple annualization for more realistic results
+            annualizedAverageReturn = averageDailyReturn * 252;
+        }
 
         // Calculate annualized standard deviation of daily returns
         const dailyStdDev = calculateStandardDeviation(dailyReturnsArray);
@@ -302,15 +360,19 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         // Calculate Max Drawdown
         const maxDrawdown = calculateMaxDrawdown(dailyPortfolioValues);
 
-        // Calculate Downside Deviation
-        const downsideReturns = dailyReturnsArray.filter(r => r < dailyRiskFreeRate); // Filter for returns below risk-free rate
-        const dailyDownsideDev = calculateDownsideDeviation(downsideReturns, dailyRiskFreeRate);
+        // Calculate Downside Deviation (use all returns, not filtered)
+        const dailyDownsideDev = calculateDownsideDeviation(dailyReturnsArray, dailyRiskFreeRate);
         const annualizedDownsideDev = annualizeMetric(dailyDownsideDev, 252);
 
-        // Calculate Ratios
-        const sharpeRatio = calculateSharpeRatio(annualizedAverageReturn, dailyRiskFreeRate, dailyStdDev);
+        // Calculate Ratios (use annualized values consistently)
+        const sharpeRatio = calculateSharpeRatio(annualizedAverageReturn, annualRiskFreeRate, annualizedStdDev);
         const calmarRatio = calculateCalmarRatio(annualizedAverageReturn, maxDrawdown);
-        const sortinoRatio = calculateSortinoRatio(annualizedAverageReturn, dailyRiskFreeRate, dailyDownsideDev);
+        const sortinoRatio = calculateSortinoRatio(annualizedAverageReturn, annualRiskFreeRate, annualizedDownsideDev);
+
+        // Apply realistic bounds to ratios to prevent unrealistic values
+        const boundedSharpeRatio = isNaN(sharpeRatio) || !isFinite(sharpeRatio) ? 0 : Math.max(-10, Math.min(10, sharpeRatio));
+        const boundedCalmarRatio = isNaN(calmarRatio) || !isFinite(calmarRatio) ? 0 : Math.max(-100, Math.min(100, calmarRatio));
+        const boundedSortinoRatio = isNaN(sortinoRatio) || !isFinite(sortinoRatio) ? 0 : Math.max(-10, Math.min(10, sortinoRatio));
 
         return {
             expectancy: isFinite(expectancy) ? expectancy : 0,
@@ -329,17 +391,17 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
             totalAbsoluteNegativePfImpact: totalAbsoluteNegativePfImpact,
             avgPnLPerDay,
             uniqueTradingDays,
-            sharpeRatio: isNaN(sharpeRatio) || !isFinite(sharpeRatio) ? 0 : sharpeRatio,
-            calmarRatio: isNaN(calmarRatio) || !isFinite(calmarRatio) ? 0 : calmarRatio,
-            sortinoRatio: isNaN(sortinoRatio) || !isFinite(sortinoRatio) ? 0 : sortinoRatio,
-            annualizedAverageReturn,
+            sharpeRatio: boundedSharpeRatio,
+            calmarRatio: boundedCalmarRatio,
+            sortinoRatio: boundedSortinoRatio,
+            annualizedAverageReturn: Math.max(-1, Math.min(10, annualizedAverageReturn)), // Cap between -100% and 1000%
             annualRiskFreeRate,
-            annualizedStdDev,
-            annualizedDownsideDev,
-            maxDrawdown
+            annualizedStdDev: Math.max(0, Math.min(5, annualizedStdDev)), // Cap volatility at 500%
+            annualizedDownsideDev: Math.max(0, Math.min(5, annualizedDownsideDev)), // Cap downside volatility at 500%
+            maxDrawdown: Math.max(0, Math.min(1, maxDrawdown)) // Cap drawdown between 0% and 100%
         };
 
-    }, [trades, capitalChanges]);
+    }, [trades, capitalChanges, useCashBasis]);
     // --- End Calculations ---
 
     // Define color palettes for the charts
@@ -459,19 +521,20 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
     const { startDate: globalStartDate, endDate: globalEndDate } = getDateRangeFromFilter(filter);
 
-    // Filter trades by date range
+    // Filter trades by date range using accounting method-aware dates
     const filteredTrades = React.useMemo(() => {
         if (!globalStartDate && !globalEndDate) return trades;
         return trades.filter(trade => {
-            const tradeDate = new Date(trade.date.split('T')[0]);
+            const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
+            const tradeDate = new Date(relevantDate.split('T')[0]);
             if (globalStartDate && tradeDate < globalStartDate) return false;
             if (globalEndDate && tradeDate > globalEndDate) return false;
             return true;
         });
-    }, [trades, globalStartDate, globalEndDate]);
+    }, [trades, globalStartDate, globalEndDate, useCashBasis]);
 
-    // Calculate min and max trade dates for heatmap (within filtered trades)
-    const tradeDates = filteredTrades.map(t => t.date.split('T')[0]);
+    // Calculate min and max trade dates for heatmap (within filtered trades) using accounting method-aware dates
+    const tradeDates = filteredTrades.map(t => getTradeDateForAccounting(t, useCashBasis).split('T')[0]);
     const heatmapStartDate = globalStartDate ? globalStartDate.toISOString().split('T')[0] : (tradeDates.length > 0 ? tradeDates.reduce((a, b) => a < b ? a : b) : '');
     const heatmapEndDate = globalEndDate ? globalEndDate.toISOString().split('T')[0] : (tradeDates.length > 0 ? tradeDates.reduce((a, b) => a > b ? a : b) : '');
 
@@ -508,22 +571,13 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         const colors = getColors();
 
         return (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            whileHover={{
-              y: -2,
-              transition: { type: "spring", stiffness: 180, damping: 22 }
-            }}
+          <div
             className="will-change-transform"
           >
             <Card className="border border-gray-100 dark:border-gray-800 shadow-sm bg-background">
               <CardBody className="p-6">
-                <motion.div 
+                <div 
                   className="flex justify-between items-start will-change-transform"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
                 >
                   <div className="space-y-2">
                     <motion.p 
@@ -534,7 +588,7 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
                     >
                       {title}
                     </motion.p>
-                    <motion.p 
+                    <motion.div 
                       className={`text-2xl font-semibold tracking-tight ${colors.text}`}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
@@ -551,25 +605,17 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
                           <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-help" />
                         </Tooltip>
                       )}
-                    </motion.p>
+                    </motion.div>
                   </div>
-                  <motion.div 
+                  <div 
                     className={`p-3 rounded-xl ${colors.bg} ${colors.icon}`}
-                    initial={{ opacity: 0, scale: 0 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{
-                      delay: 0.5,
-                      type: "spring",
-                      stiffness: 400,
-                      damping: 10
-                    }}
                   >
                     <Icon icon={icon} className="text-xl" />
-                  </motion.div>
-                </motion.div>
+                  </div>
+                </div>
               </CardBody>
             </Card>
-          </motion.div>
+          </div>
         );
       };
 
@@ -646,37 +692,37 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
                                  <StatsCard title="Loss Streak" value={analytics.lossStreak.toString()} icon="lucide:alert-triangle" color="danger" tooltipContent="Longest consecutive sequence of losing trades."/>
                                  <StatsCard title="Top Win (₹)" value={formatCurrency(analytics.topWin)} icon="lucide:star" color="success" tooltipContent="Largest profit from a single trade."/>
                                  <StatsCard title="Top Loss (₹)" value={formatCurrency(analytics.topLoss)} icon="lucide:skull" color="danger" tooltipContent="Largest loss from a single trade."/>
-                                 <StatsCard 
-                                    title="Sharpe Ratio" 
-                                    value={formatRatio(analytics.sharpeRatio)} 
-                                    icon="lucide:trending-up" 
-                                    color={analytics.sharpeRatio >= 0 ? "info" : "danger"}
+                                 <StatsCard
+                                    title="Sharpe Ratio"
+                                    value={formatRatio(analytics.sharpeRatio)}
+                                    icon="lucide:trending-up"
+                                    color={analytics.sharpeRatio >= 1 ? "success" : analytics.sharpeRatio >= 0 ? "info" : "danger"}
                                     tooltipContent={
-                                        `Measures risk-adjusted return. Higher is better.
-Formula: (Annualized Return - Risk-Free Rate) / Annualized Standard Deviation of Returns
-Values: (${analytics.annualizedAverageReturn.toFixed(2)} - ${analytics.annualRiskFreeRate.toFixed(2)}) / ${analytics.annualizedStdDev.toFixed(2)}`
+                                        `Measures risk-adjusted return. Higher is better. >1 is good, >2 is excellent.
+Formula: (Annualized Return - Risk-Free Rate) / Annualized Standard Deviation
+Values: (${(analytics.annualizedAverageReturn * 100).toFixed(1)}% - ${(analytics.annualRiskFreeRate * 100).toFixed(1)}%) / ${(analytics.annualizedStdDev * 100).toFixed(1)}%`
                                     }
                                 />
-                                <StatsCard 
-                                    title="Calmar Ratio" 
-                                    value={formatRatio(analytics.calmarRatio)} 
-                                    icon="lucide:activity" 
-                                    color={analytics.calmarRatio >= 0 ? "info" : "danger"}
+                                <StatsCard
+                                    title="Calmar Ratio"
+                                    value={formatRatio(analytics.calmarRatio)}
+                                    icon="lucide:activity"
+                                    color={analytics.calmarRatio >= 1 ? "success" : analytics.calmarRatio >= 0 ? "info" : "danger"}
                                     tooltipContent={
-                                        `Measures risk-adjusted return relative to maximum drawdown. Higher is better.
+                                        `Measures return relative to maximum drawdown. Higher is better. >1 is good.
 Formula: Annualized Return / Max Drawdown
-Values: ${analytics.annualizedAverageReturn.toFixed(2)} / ${analytics.maxDrawdown.toFixed(2)}`
+Values: ${(analytics.annualizedAverageReturn * 100).toFixed(1)}% / ${(analytics.maxDrawdown * 100).toFixed(1)}%`
                                     }
                                 />
-                                <StatsCard 
-                                    title="Sortino Ratio" 
-                                    value={formatRatio(analytics.sortinoRatio)} 
-                                    icon="lucide:arrow-down-left" 
-                                    color={analytics.sortinoRatio >= 0 ? "info" : "danger"}
+                                <StatsCard
+                                    title="Sortino Ratio"
+                                    value={formatRatio(analytics.sortinoRatio)}
+                                    icon="lucide:arrow-down-left"
+                                    color={analytics.sortinoRatio >= 1 ? "success" : analytics.sortinoRatio >= 0 ? "info" : "danger"}
                                     tooltipContent={
-                                        `Measures risk-adjusted return using downside deviation. Higher is better.
+                                        `Measures return using only downside risk. Higher is better. >1 is good, >2 is excellent.
 Formula: (Annualized Return - Risk-Free Rate) / Annualized Downside Deviation
-Values: (${analytics.annualizedAverageReturn.toFixed(2)} - ${analytics.annualRiskFreeRate.toFixed(2)}) / ${analytics.annualizedDownsideDev.toFixed(2)}`
+Values: (${(analytics.annualizedAverageReturn * 100).toFixed(1)}% - ${(analytics.annualRiskFreeRate * 100).toFixed(1)}%) / ${(analytics.annualizedDownsideDev * 100).toFixed(1)}%`
                                     }
                                 />
                             </div>

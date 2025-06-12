@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { useTruePortfolio } from '../utils/TruePortfolioContext';
+import { useAccountingMethod } from '../context/AccountingMethodContext';
 
 /**
  * Hook that provides true portfolio functionality with trades integration
@@ -7,31 +8,33 @@ import { useTruePortfolio } from '../utils/TruePortfolioContext';
  */
 export const useTruePortfolioWithTrades = (trades: any[] = []) => {
   const truePortfolioContext = useTruePortfolio();
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
 
-  // Memoize functions that depend on trades
+  // Memoize functions that depend on trades and accounting method
   const getTruePortfolioSize = useMemo(() => {
     return (month: string, year: number) => {
-      return truePortfolioContext.getTruePortfolioSize(month, year, trades);
+      return truePortfolioContext.getTruePortfolioSize(month, year, trades, useCashBasis);
     };
-  }, [truePortfolioContext.getTruePortfolioSize, trades]);
+  }, [truePortfolioContext.getTruePortfolioSize, trades, useCashBasis]);
 
   const getLatestTruePortfolioSize = useMemo(() => {
     return () => {
-      return truePortfolioContext.getLatestTruePortfolioSize(trades);
+      return truePortfolioContext.getLatestTruePortfolioSize(trades, useCashBasis);
     };
-  }, [truePortfolioContext.getLatestTruePortfolioSize, trades]);
+  }, [truePortfolioContext.getLatestTruePortfolioSize, trades, useCashBasis]);
 
   const getMonthlyTruePortfolio = useMemo(() => {
     return (month: string, year: number) => {
-      return truePortfolioContext.getMonthlyTruePortfolio(month, year, trades);
+      return truePortfolioContext.getMonthlyTruePortfolio(month, year, trades, useCashBasis);
     };
-  }, [truePortfolioContext.getMonthlyTruePortfolio, trades]);
+  }, [truePortfolioContext.getMonthlyTruePortfolio, trades, useCashBasis]);
 
   const getAllMonthlyTruePortfolios = useMemo(() => {
     return () => {
-      return truePortfolioContext.getAllMonthlyTruePortfolios(trades);
+      return truePortfolioContext.getAllMonthlyTruePortfolios(trades, useCashBasis);
     };
-  }, [truePortfolioContext.getAllMonthlyTruePortfolios, trades]);
+  }, [truePortfolioContext.getAllMonthlyTruePortfolios, trades, useCashBasis]);
 
   // Current portfolio size for backward compatibility
   const portfolioSize = useMemo(() => {

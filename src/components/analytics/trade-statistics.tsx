@@ -4,6 +4,7 @@ import { Icon } from "@iconify/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { calcWeightedRewardRisk } from '../../utils/tradeCalculations';
+import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
 
 interface StatProps {
   label: string;
@@ -108,9 +109,13 @@ interface TradeStatisticsProps {
 }
 
 export const TradeStatistics: React.FC<TradeStatisticsProps> = ({ trades }) => {
+  const { displayName } = useAccountingMethodDisplay();
+
   const totalTrades = trades.length;
-  const winTrades = trades.filter(t => t.plRs > 0);
-  const lossTrades = trades.filter(t => t.plRs < 0);
+
+  // Use existing calculation logic (this component uses stockMove, not P/L)
+  const winTrades = trades.filter(t => (t.stockMove || 0) > 0);
+  const lossTrades = trades.filter(t => (t.stockMove || 0) < 0);
   const winRate = totalTrades > 0 ? (winTrades.length / totalTrades) * 100 : 0;
   const avgGain = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / winTrades.length : 0;
   const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / lossTrades.length : 0;
@@ -119,47 +124,50 @@ export const TradeStatistics: React.FC<TradeStatisticsProps> = ({ trades }) => {
   const avgR = totalTrades > 0 ? trades.reduce((sum, t) => sum + calcWeightedRewardRisk(t), 0) / totalTrades : 0;
 
   return (
-    <div className="space-y-2">
-      <Stat 
-        label="Win %" 
-        value={winRate.toFixed(2)} 
-        isPercentage
-        tooltip="Percentage of profitable trades in the last 12 months"
-        index={0}
-      />
-      <Stat 
-        label="Avg Gain" 
-        value={avgGain.toFixed(2)} 
-        isPercentage
-        tooltip="Average percentage gain on winning trades"
-        index={1}
-      />
-      <Stat 
-        label="Avg Loss" 
-        value={avgLoss.toFixed(2)} 
-        isPercentage
-        tooltip="Average percentage loss on losing trades"
-        index={2}
-      />
-      <Stat 
-        label="Avg Position Size" 
-        value={avgPositionSize.toFixed(2)} 
-        isPercentage
-        tooltip="Average position size as percentage of portfolio"
-        index={3}
-      />
-      <Stat 
-        label="Avg Holding Days" 
-        value={avgHoldingDays.toFixed(2)}
-        tooltip="Average number of days positions are held"
-        index={4}
-      />
-      <Stat 
-        label="Avg R:R" 
-        value={avgR.toFixed(2)}
-        tooltip="Average reward-to-risk ratio across all trades (weighted, matches dashboard logic)"
-        index={5}
-      />
+    <div className="space-y-4">
+
+      <div className="space-y-2">
+        <Stat
+          label="Win %"
+          value={winRate.toFixed(2)}
+          isPercentage
+          tooltip="Percentage of profitable trades in the last 12 months"
+          index={0}
+        />
+        <Stat
+          label="Avg Gain"
+          value={avgGain.toFixed(2)}
+          isPercentage
+          tooltip="Average percentage gain on winning trades"
+          index={1}
+        />
+        <Stat
+          label="Avg Loss"
+          value={avgLoss.toFixed(2)}
+          isPercentage
+          tooltip="Average percentage loss on losing trades"
+          index={2}
+        />
+        <Stat
+          label="Avg Position Size"
+          value={avgPositionSize.toFixed(2)}
+          isPercentage
+          tooltip="Average position size as percentage of portfolio"
+          index={3}
+        />
+        <Stat
+          label="Avg Holding Days"
+          value={avgHoldingDays.toFixed(2)}
+          tooltip="Average number of days positions are held"
+          index={4}
+        />
+        <Stat
+          label="Avg R:R"
+          value={avgR.toFixed(2)}
+          tooltip="Average reward-to-risk ratio across all trades (weighted, matches dashboard logic)"
+          index={5}
+        />
+      </div>
     </div>
   );
 };

@@ -5,6 +5,9 @@ import { motion } from "framer-motion";
 import { useTrades } from "../hooks/use-trades";
 import { useTruePortfolioWithTrades } from "../hooks/use-true-portfolio-with-trades";
 import { calcXIRR } from "../utils/tradeCalculations";
+import { useAccountingMethod } from "../context/AccountingMethodContext";
+import { useGlobalFilter } from "../context/GlobalFilterContext";
+import { getTradesForMonth, calculateTradePL } from "../utils/accountingUtils";
 
 // Helper function to create safe dependencies for useEffect/useMemo
 const safeDeps = (deps: any[]) => deps;
@@ -33,7 +36,10 @@ interface MonthlyData {
 }
 
 export const MonthlyPerformanceTable: React.FC = () => {
-  const { trades } = useTrades();
+  const { trades } = useTrades(); // This now returns filtered trades based on global filter and accounting method
+  const { accountingMethod } = useAccountingMethod();
+  const { filter } = useGlobalFilter();
+  const useCashBasis = accountingMethod === 'cash';
   const {
     portfolioSize,
     getPortfolioSize,
@@ -52,7 +58,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
   // Removed debug console.log to prevent unnecessary re-renders
 
   // Get all monthly portfolio data
-  const monthlyPortfolios = getAllMonthlyTruePortfolios();
+  const monthlyPortfolios = getAllMonthlyTruePortfolios(trades, useCashBasis);
   const [yearlyStartingCapital, setYearlyStartingCapitalState] = React.useState(portfolioSize);
 
   // Inline editing state
@@ -76,31 +82,43 @@ export const MonthlyPerformanceTable: React.FC = () => {
     [trades, selectedYear]
   );
 
-  // Memoize monthly map calculation
+  // Memoize monthly map calculation based on accounting method
   const monthlyMap = React.useMemo(() => {
     const map: Record<string, { trades: typeof trades; date: Date }> = {};
 
-    filteredTrades.forEach(trade => {
-      const d = new Date(trade.date);
-      const month = d.toLocaleString('default', { month: 'short' });
-      if (!map[month]) {
-        map[month] = { trades: [], date: d };
-      }
-      map[month].trades.push(trade);
-    });
+    monthOrder.forEach(month => {
+      const monthTrades = getTradesForMonth(filteredTrades, month, selectedYear, useCashBasis);
+      if (monthTrades.length > 0) {
+        // Use the first trade's date for the month date
+        const firstTradeDate = useCashBasis
+          ? new Date((monthTrades[0] as any)._cashBasisExit?.date || monthTrades[0].date)
+          : new Date(monthTrades[0].date);
 
-    // Sort trades by date within each month
-    Object.values(map).forEach(monthData => {
-      monthData.trades.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        map[month] = {
+          trades: monthTrades,
+          date: firstTradeDate
+        };
+
+        // Sort trades by date within each month
+        map[month].trades.sort((a, b) => {
+          const dateA = useCashBasis
+            ? new Date((a as any)._cashBasisExit?.date || a.date)
+            : new Date(a.date);
+          const dateB = useCashBasis
+            ? new Date((b as any)._cashBasisExit?.date || b.date)
+            : new Date(b.date);
+          return dateA.getTime() - dateB.getTime();
+        });
+      }
     });
 
     return map;
-  }, [filteredTrades]);
+  }, [filteredTrades, selectedYear, useCashBasis, monthOrder]);
 
   // Memoize filtered monthly portfolios
   const filteredMonthlyPortfolios = React.useMemo(() =>
     monthlyPortfolios.filter(mp => mp.year === selectedYear),
-    [monthlyPortfolios, selectedYear]
+    [monthlyPortfolios, selectedYear, useCashBasis, trades]
   );
 
   // Memoize initial monthly data calculation
@@ -108,8 +126,15 @@ export const MonthlyPerformanceTable: React.FC = () => {
     const monthData = monthlyMap[month] || { trades: [], date: new Date() };
     const monthTrades = monthData.trades;
     const tradesCount = monthTrades.length;
-    const winTrades = monthTrades.filter(t => t.plRs > 0);
-    const lossTrades = monthTrades.filter(t => t.plRs < 0);
+
+    // Calculate P/L based on accounting method
+    const tradesWithPL = monthTrades.map(trade => ({
+      ...trade,
+      accountingPL: calculateTradePL(trade, useCashBasis)
+    }));
+
+    const winTrades = tradesWithPL.filter(t => t.accountingPL > 0);
+    const lossTrades = tradesWithPL.filter(t => t.accountingPL < 0);
     const winPercentage = tradesCount > 0 ? (winTrades.length / tradesCount) * 100 : 0;
     const avgGain = winTrades.length > 0 ? winTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / winTrades.length : 0;
     const avgLoss = lossTrades.length > 0 ? lossTrades.reduce((sum, t) => sum + (t.stockMove || 0), 0) / lossTrades.length : 0;
@@ -151,15 +176,20 @@ export const MonthlyPerformanceTable: React.FC = () => {
 
     // For months with no trades, show '-' for most stats and set finalCapital to 0
     // Use the starting capital from monthPortfolio which includes the net deposits/withdrawals
-    const adjustedStartingCapital = monthPortfolio.startingCapital || getPortfolioSize(month, selectedYear);
-    
+    const adjustedStartingCapital = monthPortfolio.startingCapital || getPortfolioSize(month, selectedYear, trades, useCashBasis);
+
+    // Check if there's any P/L for this month (regardless of trade count)
+    // This is important for Cash Basis where P/L might exist without trades initiated in this month
+    const hasMonthlyPL = monthPortfolio.pl !== 0;
+    const shouldShowPL = tradesCount > 0 || hasMonthlyPL;
+
     return {
       month,
       addedWithdrawn: netAddedWithdrawn,
       startingCapital: adjustedStartingCapital,
-      pl: tradesCount > 0 ? monthPortfolio.pl : '-',
-      plPercentage: tradesCount > 0 ? 0 : '-',
-      finalCapital: tradesCount > 0 ? monthPortfolio.finalCapital : 0,
+      pl: shouldShowPL ? monthPortfolio.pl : '-',
+      plPercentage: shouldShowPL ? 0 : '-', // Will be calculated later in computedData
+      finalCapital: shouldShowPL ? monthPortfolio.finalCapital : adjustedStartingCapital,
       yearPlPercentage: '',
       trades: tradesCount > 0 ? tradesCount : '-',
       winPercentage: tradesCount > 0 ? winPercentage : '-',
@@ -175,7 +205,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
       rollingReturn6M: 0,
       rollingReturn12M: 0
     };
-  }), [monthOrder, monthlyMap, filteredMonthlyPortfolios, selectedYear, capitalChanges, getPortfolioSize]);
+  }), [monthOrder, monthlyMap, filteredMonthlyPortfolios, selectedYear, capitalChanges, getPortfolioSize, useCashBasis]);
 
   // Effect to update yearly starting capital when portfolio size changes
   React.useEffect(() => {
@@ -339,7 +369,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
     });
 
     // Get the current portfolio size for this month
-    const currentPortfolioSize = getPortfolioSize(month, year);
+    const currentPortfolioSize = getPortfolioSize(month, year, trades, useCashBasis);
     
     if (existingChange) {
       // Calculate the difference to adjust the portfolio size
@@ -451,7 +481,25 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           P/L
-          <Tooltip content="Total profit or loss from all trades closed in this month (before taxes)." placement="top">
+          <Tooltip
+            content={
+              <div className="max-w-xs p-2">
+                <div className="font-semibold text-sm mb-1">
+                  P/L Calculation ({useCashBasis ? 'Cash Basis' : 'Accrual Basis'})
+                </div>
+                <div className="text-xs">
+                  {useCashBasis
+                    ? "P/L is attributed to the month when trades are actually exited/closed, regardless of when they were initiated."
+                    : "P/L is attributed to the month when trades are initiated/opened, regardless of when they are closed."
+                  }
+                </div>
+                <div className="text-xs text-warning-600 mt-2">
+                  Toggle accounting method using the switch above to see different P/L attribution.
+                </div>
+              </div>
+            }
+            placement="top"
+          >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
           </Tooltip>
         </div>
@@ -462,7 +510,25 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           % P/L
-          <Tooltip content="Profit or loss as a percentage of starting capital for the month (before taxes)." placement="top">
+          <Tooltip
+            content={
+              <div className="max-w-xs p-2">
+                <div className="font-semibold text-sm mb-1">
+                  P/L Percentage ({useCashBasis ? 'Cash Basis' : 'Accrual Basis'})
+                </div>
+                <div className="text-xs">
+                  Profit or loss as a percentage of starting capital for the month (before taxes).
+                </div>
+                <div className="text-xs mt-2">
+                  {useCashBasis
+                    ? "Based on P/L from trades exited in this month."
+                    : "Based on P/L from trades initiated in this month."
+                  }
+                </div>
+              </div>
+            }
+            placement="top"
+          >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
           </Tooltip>
         </div>

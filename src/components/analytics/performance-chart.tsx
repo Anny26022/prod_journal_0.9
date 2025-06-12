@@ -12,6 +12,7 @@ import {
 import { motion } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
+import { useAccountingMethod } from "../../context/AccountingMethodContext";
 
 export interface ChartDataPoint {
   month: string;
@@ -25,6 +26,7 @@ export interface ChartDataPoint {
 interface PerformanceChartProps {
   trades: Trade[];
   onDataUpdate?: (data: ChartDataPoint[]) => void;
+  selectedView: string;
 }
 
 function getMonthYear(dateStr: string) {
@@ -33,9 +35,11 @@ function getMonthYear(dateStr: string) {
 }
 
 export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
-  const { trades, onDataUpdate } = props;
+  const { trades, onDataUpdate, selectedView } = props;
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
   const { getPortfolioSize, getAllMonthlyTruePortfolios } = useTruePortfolioWithTrades(trades);
-  const monthlyPortfolios = getAllMonthlyTruePortfolios();
+  const monthlyPortfolios = getAllMonthlyTruePortfolios(useCashBasis);
   
   // Get the earliest and latest trade dates to determine the date range
   const sortedTrades = [...trades].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -84,8 +88,6 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
     return processedChartData.map((d, i) => ({ ...d, volatility: volatilityArr[i] }));
   }, [processedChartData]);
 
-  const [activeView, setActiveView] = React.useState<'capital' | 'percentage' | 'drawdown' | 'volatility'>('capital');
-  
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
@@ -97,40 +99,8 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
 
   return (
     <div className="h-[350px]">
-      <div className="flex justify-end mb-4">
-        <motion.div 
-          className="flex border border-divider rounded-medium overflow-hidden"
-          whileHover={{ scale: 1.02 }}
-          transition={{ type: "spring", stiffness: 400, damping: 10 }}
-        >
-          <button
-            className={`px-3 py-1 text-xs transition-colors ${activeView === "capital" ? "bg-primary text-white" : "bg-content1 hover:bg-content2"}`}
-            onClick={() => setActiveView("capital")}
-          >
-            Capital
-          </button>
-          <button
-            className={`px-3 py-1 text-xs transition-colors ${activeView === "percentage" ? "bg-primary text-white" : "bg-content1 hover:bg-content2"}`}
-            onClick={() => setActiveView("percentage")}
-          >
-            % P/L
-          </button>
-          <button
-            className={`px-3 py-1 text-xs transition-colors ${activeView === "drawdown" ? "bg-primary text-white" : "bg-content1 hover:bg-content2"}`}
-            onClick={() => setActiveView("drawdown")}
-          >
-            Drawdown
-          </button>
-          <button
-            className={`px-3 py-1 text-xs transition-colors ${activeView === "volatility" ? "bg-primary text-white" : "bg-content1 hover:bg-content2"}`}
-            onClick={() => setActiveView("volatility")}
-          >
-            Volatility
-          </button>
-        </motion.div>
-      </div>
       <ResponsiveContainer width="100%" height="100%">
-        {activeView === "capital" ? (
+        {selectedView === "capital" ? (
           <AreaChart
             data={processedChartData}
             margin={{ top: 10, right: 30, left: 30, bottom: 30 }}
@@ -199,7 +169,7 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
               activeDot={{ r: 6, strokeWidth: 2 }}
             />
           </AreaChart>
-        ) : activeView === "percentage" ? (
+        ) : (
           <AreaChart
             data={processedChartData}
             margin={{ top: 10, right: 30, left: 30, bottom: 30 }}
@@ -218,15 +188,30 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
               dy={10}
             />
             <YAxis 
-              tickFormatter={(value) => `${value}%`}
+              tickFormatter={(value) => `${value.toFixed(0)}%`}
               axisLine={false}
               tickLine={false}
               dx={-10}
-              width={60}
+              width={80}
               tick={{ fontSize: 12 }}
             />
             <Tooltip
-              formatter={(value: number) => [`${value.toFixed(2)}%`, "P/L %"]}
+              formatter={(value: number, name: string, props: any) => {
+                if (name === "P&L Percentage") {
+                  const dataPoint = props.payload;
+                  const items = [
+                    [`${value.toFixed(2)}%`, "P&L Percentage"],
+                  ];
+                  if (dataPoint.pl !== undefined && dataPoint.pl !== null) {
+                    items.push([formatCurrency(dataPoint.pl), "Total P&L"]);
+                  }
+                  if (dataPoint.startingCapital !== undefined && dataPoint.startingCapital !== null) {
+                    items.push([formatCurrency(dataPoint.startingCapital), "Starting Capital"]);
+                  }
+                  return items;
+                }
+                return [`${value.toFixed(2)}%`, name];
+              }}
               labelFormatter={(label) => label}
               contentStyle={{
                 backgroundColor: "hsl(var(--heroui-content1))",
@@ -239,106 +224,10 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
             <Area 
               type="monotone" 
               dataKey="plPercentage" 
-              name="Monthly P/L"
+              name="P&L Percentage"
               stroke="hsl(var(--heroui-success))" 
               fillOpacity={1}
               fill="url(#colorPL)" 
-              strokeWidth={2}
-              activeDot={{ r: 6, strokeWidth: 2 }}
-            />
-          </AreaChart>
-        ) : activeView === "drawdown" ? (
-          <AreaChart
-            data={drawdownData}
-            margin={{ top: 10, right: 30, left: 30, bottom: 30 }}
-          >
-            <defs>
-              <linearGradient id="colorDrawdown" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(var(--heroui-danger-500))" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(var(--heroui-danger-500))" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--heroui-divider))" />
-            <XAxis 
-              dataKey="month" 
-              axisLine={false}
-              tickLine={false}
-              dy={10}
-            />
-            <YAxis 
-              tickFormatter={(value) => `${value.toFixed(2)}%`}
-              axisLine={false}
-              tickLine={false}
-              dx={-10}
-              width={60}
-              tick={{ fontSize: 12 }}
-            />
-            <Tooltip
-              formatter={(value: number) => [`${value.toFixed(2)}%`, "Drawdown"]}
-              labelFormatter={(label) => label}
-              contentStyle={{
-                backgroundColor: "hsl(var(--heroui-content1))",
-                border: "1px solid hsl(var(--heroui-divider))",
-                borderRadius: "8px",
-                padding: "8px 12px"
-              }}
-            />
-            <Legend />
-            <Area 
-              type="monotone" 
-              dataKey="drawdown" 
-              name="Drawdown"
-              stroke="hsl(var(--heroui-danger))" 
-              fillOpacity={1}
-              fill="url(#colorDrawdown)" 
-              strokeWidth={2}
-              activeDot={{ r: 6, strokeWidth: 2 }}
-            />
-          </AreaChart>
-        ) : (
-          <AreaChart
-            data={volatilityData}
-            margin={{ top: 10, right: 30, left: 30, bottom: 30 }}
-          >
-            <defs>
-              <linearGradient id="colorVolatility" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="hsl(var(--heroui-warning-500))" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="hsl(var(--heroui-warning-500))" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--heroui-divider))" />
-            <XAxis 
-              dataKey="month" 
-              axisLine={false}
-              tickLine={false}
-              dy={10}
-            />
-            <YAxis 
-              tickFormatter={(value) => `${value.toFixed(2)}%`}
-              axisLine={false}
-              tickLine={false}
-              dx={-10}
-              width={60}
-              tick={{ fontSize: 12 }}
-            />
-            <Tooltip
-              formatter={(value: number) => [`${value.toFixed(2)}%`, "Volatility"]}
-              labelFormatter={(label) => label}
-              contentStyle={{
-                backgroundColor: "hsl(var(--heroui-content1))",
-                border: "1px solid hsl(var(--heroui-divider))",
-                borderRadius: "8px",
-                padding: "8px 12px"
-              }}
-            />
-            <Legend />
-            <Area 
-              type="monotone" 
-              dataKey="volatility" 
-              name="Volatility (3M Std Dev)"
-              stroke="hsl(var(--heroui-warning))" 
-              fillOpacity={1}
-              fill="url(#colorVolatility)" 
               strokeWidth={2}
               activeDot={{ r: 6, strokeWidth: 2 }}
             />

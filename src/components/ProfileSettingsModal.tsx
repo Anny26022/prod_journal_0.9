@@ -27,6 +27,9 @@ import { useTruePortfolio } from "../utils/TruePortfolioContext";
 import { YearlyStartingCapitalModal } from "./YearlyStartingCapitalModal";
 import { generateId } from "../utils/helpers";
 import { useTrades } from "../hooks/use-trades";
+import { useMilestones } from "../hooks/use-milestones";
+import { useAccountingMethod } from "../context/AccountingMethodContext";
+import "../styles/smooth-animations.css";
 
 const months = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -64,6 +67,8 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
   } = useTruePortfolio();
 
   const { trades } = useTrades();
+  const { achievedMilestones, ALL_MILESTONES } = useMilestones();
+  const { accountingMethod, setAccountingMethod } = useAccountingMethod();
   
   const [selectedTab, setSelectedTab] = useState('yearly');
   const [isYearlyCapitalModalOpen, setIsYearlyCapitalModalOpen] = useState(false);
@@ -195,22 +200,31 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
   );
 
   return (
-    <Modal 
-      isOpen={isOpen} 
+    <Modal
+      isOpen={isOpen}
       onOpenChange={onOpenChange}
       size="2xl"
+      scrollBehavior="inside"
+      classNames={{
+        base: "max-w-[90vw] max-h-[85vh] sm:max-w-2xl",
+        wrapper: "items-center justify-center p-4",
+        body: "overflow-y-auto p-0",
+        backdrop: "bg-black/50"
+      }}
     >
-      <ModalContent>
+      <ModalContent className="bg-background/95 backdrop-blur-xl border border-divider/50 shadow-2xl">
         {(onClose) => (
           <>
-            <ModalHeader className="flex flex-col gap-1 border-b border-divider pb-4">
-              <div className="flex items-center gap-2">
-                <Icon icon="lucide:settings" className="text-primary text-2xl" />
-                <span className="text-xl font-semibold tracking-tight">Portfolio Settings</span>
+            <ModalHeader className="flex items-center gap-3 px-6 py-4 border-b border-divider/50 bg-gradient-to-r from-primary/5 to-secondary/5">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-primary/10">
+                  <Icon icon="lucide:settings" className="text-primary text-lg" />
+                </div>
+                <span className="text-lg font-semibold tracking-tight">Portfolio Settings</span>
               </div>
             </ModalHeader>
-            <ModalBody className="space-y-6">
-              <div className="space-y-4">
+            <ModalBody className="p-6 space-y-4">
+              <div className="bg-content1/50 rounded-xl p-4 border border-divider/30">
                 <Input
                   label="Your Name"
                   labelPlacement="outside"
@@ -218,68 +232,218 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                   value={userName}
                   onValueChange={setUserName}
                   className="w-full"
-                  startContent={<Icon icon="lucide:user" className="text-default-400 text-lg" />}
+                  size="sm"
+                  variant="bordered"
+                  startContent={<Icon icon="lucide:user" className="text-default-400 text-base" />}
                 />
               </div>
-              <div className="space-y-4">
-                <h4 className="font-semibold text-lg">Display Settings</h4>
-                <div className="flex items-center justify-between p-4 border border-divider rounded-lg bg-content2/50 dark:bg-content2/30 shadow-sm">
+              <div className="bg-content1/50 rounded-xl p-4 border border-divider/30">
+                <h4 className="font-semibold text-base mb-3 flex items-center gap-2">
+                  <Icon icon="lucide:monitor" className="text-primary text-base" />
+                  Display Settings
+                </h4>
+                <div className="flex items-center justify-between p-3 border border-divider/50 rounded-lg bg-background/50">
                   <div>
-                    <p className="font-semibold text-base text-foreground">Full Width Layout</p>
-                    <p className="text-sm text-default-500">Expand the app content to fill the entire screen width.</p>
+                    <p className="font-medium text-sm text-foreground">Full Width Layout</p>
+                    <p className="text-xs text-default-500">Expand content to fill screen width</p>
                   </div>
                   <Switch
                     isSelected={isFullWidthEnabled}
                     onValueChange={setIsFullWidthEnabled}
+                    size="sm"
                     aria-label="Toggle full width layout"
                   />
+                </div>
+              </div>
+
+              <div className="bg-content1/50 rounded-xl p-4 border border-divider/30">
+                <h4 className="font-semibold text-base mb-3 flex items-center gap-2">
+                  <Icon icon="lucide:calculator" className="text-primary text-base" />
+                  P&L Accounting Method
+                </h4>
+                <div className="accounting-method-container flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-divider/50 rounded-lg bg-background/50 gap-3">
+                  <div className="flex-1">
+                    <AnimatePresence mode="wait">
+                      <motion.p
+                        className="font-medium text-sm text-foreground"
+                        key={accountingMethod}
+                        initial={{ opacity: 0, y: -5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 5 }}
+                        transition={{
+                          duration: 0.15,
+                          ease: [0.4, 0, 0.2, 1],
+                          type: "tween"
+                        }}
+                      >
+                        {accountingMethod === 'cash' ? 'Cash Basis Accounting' : 'Accrual Basis Accounting'}
+                      </motion.p>
+                    </AnimatePresence>
+                    <AnimatePresence mode="wait">
+                      <motion.p
+                        className="text-xs text-default-500 mt-1"
+                        key={`${accountingMethod}-desc`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{
+                          duration: 0.2,
+                          delay: 0.05,
+                          ease: [0.4, 0, 0.2, 1]
+                        }}
+                      >
+                        {accountingMethod === 'cash'
+                          ? 'P&L attributed to exit dates'
+                          : 'P&L attributed to entry dates'
+                        }
+                      </motion.p>
+                    </AnimatePresence>
+                    <div className="mt-2 text-xs text-success-600 flex items-center gap-1">
+                      <Icon icon="lucide:lightbulb" className="w-3 h-3" />
+                      Cash Basis is recommended for most traders
+                    </div>
+                  </div>
+                  <div className="accounting-toggle-wrapper flex items-center justify-center sm:justify-end gap-2 flex-shrink-0">
+                    <motion.span
+                      className="text-xs font-medium smooth-text-transition gpu-accelerated"
+                      animate={{
+                        scale: accountingMethod === 'accrual' ? 1.05 : 1,
+                        color: accountingMethod === 'accrual' ? '#3b82f6' : '#71717a',
+                        fontWeight: accountingMethod === 'accrual' ? 600 : 500
+                      }}
+                      transition={{
+                        duration: 0.2,
+                        ease: [0.4, 0, 0.2, 1],
+                        type: "tween"
+                      }}
+                    >
+                      Accrual
+                    </motion.span>
+                    <motion.div
+                      whileTap={{ scale: 0.96 }}
+                      whileHover={{ scale: 1.02 }}
+                      transition={{
+                        duration: 0.1,
+                        ease: [0.4, 0, 0.2, 1]
+                      }}
+                      className="switch-press-feedback"
+                    >
+                      <Switch
+                        isSelected={accountingMethod === 'cash'}
+                        onValueChange={(isSelected) => {
+                          // Add subtle haptic feedback simulation
+                          if (navigator.vibrate) {
+                            navigator.vibrate(10);
+                          }
+                          setAccountingMethod(isSelected ? 'cash' : 'accrual');
+                        }}
+                        color="success"
+                        size="sm"
+                        thumbIcon={({ isSelected, className }) =>
+                          <AnimatePresence mode="wait">
+                            <motion.div
+                              key={isSelected ? 'cash' : 'accrual'}
+                              initial={{ scale: 0, rotate: -90, opacity: 0 }}
+                              animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                              exit={{ scale: 0, rotate: 90, opacity: 0 }}
+                              transition={{
+                                duration: 0.2,
+                                ease: [0.4, 0, 0.2, 1],
+                                type: "tween"
+                              }}
+                              className="smooth-icon gpu-accelerated"
+                            >
+                              <Icon
+                                icon={isSelected ? "lucide:banknote" : "lucide:calendar-clock"}
+                                className={`${className} transition-colors duration-150 ease-out`}
+                              />
+                            </motion.div>
+                          </AnimatePresence>
+                        }
+                        classNames={{
+                          wrapper: "smooth-switch group-data-[selected=true]:bg-success group-data-[selected=false]:bg-default-200",
+                          thumb: "smooth-switch-thumb bg-white shadow-lg group-data-[selected=true]:ml-6 group-data-[pressed=true]:w-7 group-data-[selected]:group-data-[pressed]:ml-4",
+                          thumbIcon: "text-default-600 group-data-[selected=true]:text-success-600 transition-colors duration-150"
+                        }}
+                        aria-label="Toggle accounting method"
+                      />
+                    </motion.div>
+                    <motion.span
+                      className="text-xs font-medium smooth-text-transition gpu-accelerated"
+                      animate={{
+                        scale: accountingMethod === 'cash' ? 1.05 : 1,
+                        color: accountingMethod === 'cash' ? '#22c55e' : '#71717a',
+                        fontWeight: accountingMethod === 'cash' ? 600 : 500
+                      }}
+                      transition={{
+                        duration: 0.2,
+                        ease: [0.4, 0, 0.2, 1],
+                        type: "tween"
+                      }}
+                    >
+                      Cash
+                    </motion.span>
+                  </div>
                 </div>
               </div>
               <Tabs
                 selectedKey={selectedTab}
                 onSelectionChange={(key) => setSelectedTab(key as string)}
                 aria-label="Portfolio settings tabs"
+                size="sm"
+                variant="underlined"
+                classNames={{
+                  tabList: "gap-6 w-full relative rounded-none p-0 border-b border-divider/50",
+                  cursor: "w-full bg-primary",
+                  tab: "max-w-fit px-0 h-10",
+                  tabContent: "group-data-[selected=true]:text-primary text-default-500 font-medium"
+                }}
               >
                 <Tab key="yearly" title="Yearly Starting Capital">
-                  <div className="py-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-foreground-500">
-                          Set starting capital for January of each year. This forms the foundation for true portfolio calculations.
+                  <div className="py-3 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                      <div className="flex-1">
+                        <p className="text-xs text-foreground-500">
+                          Set starting capital for January of each year
                         </p>
                       </div>
                       <Button
                         color="primary"
                         onPress={() => setIsYearlyCapitalModalOpen(true)}
-                        startContent={<Icon icon="lucide:plus" />}
+                        startContent={<Icon icon="lucide:plus" className="w-3 h-3" />}
                         size="sm"
-                        variant="shadow"
-                        radius="full"
+                        variant="flat"
+                        className="w-full sm:w-auto flex-shrink-0 text-xs"
                       >
                         Manage Years
                       </Button>
                     </div>
 
                     {sortedYearlyCapitals.length === 0 ? (
-                      <div className="text-center py-8 text-default-500">
-                        <Icon icon="lucide:calendar-x" className="text-4xl mb-2 mx-auto" />
-                        <p>No yearly starting capitals set yet.</p>
-                        <p className="text-sm">Click "Manage Years" to get started.</p>
+                      <div className="text-center py-6 text-default-500">
+                        <Icon icon="lucide:calendar-x" className="text-2xl mb-2 mx-auto opacity-50" />
+                        <p className="text-sm">No yearly capitals set</p>
+                        <p className="text-xs opacity-70">Click "Manage Years" to start</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-2">
                         {sortedYearlyCapitals.map((yearData) => (
                           <div
                             key={yearData.year}
-                            className="flex items-center justify-between p-4 border border-divider rounded-lg bg-content2/50 dark:bg-content2/30 shadow-sm"
+                            className="flex items-center justify-between p-3 border border-divider/50 rounded-lg bg-background/50 hover:bg-content1/30 transition-colors"
                           >
-                            <div>
-                              <p className="font-semibold text-lg text-foreground">{yearData.year}</p>
-                              <p className="text-sm text-default-500">Updated: {new Date(yearData.updatedAt).toLocaleDateString()}</p>
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-success/10 flex items-center justify-center">
+                                <Icon icon="lucide:calendar" className="w-4 h-4 text-success" />
+                              </div>
+                              <div>
+                                <p className="font-semibold text-sm text-foreground">{yearData.year}</p>
+                                <p className="text-xs text-default-500">{new Date(yearData.updatedAt).toLocaleDateString()}</p>
+                              </div>
                             </div>
                             <div className="text-right">
-                              <p className="font-bold text-lg text-success-600">{new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(yearData.startingCapital)}</p>
-                              <p className="text-sm text-default-500">Starting Capital</p>
+                              <p className="font-bold text-sm text-success-600">₹{yearData.startingCapital.toLocaleString()}</p>
+                              <p className="text-xs text-default-500">Starting Capital</p>
                             </div>
                           </div>
                         ))}
@@ -288,15 +452,18 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                   </div>
                 </Tab>
                 <Tab key="capital" title="Capital Changes">
-                  <div className="py-4 space-y-4">
-                    <p className="text-sm text-foreground-500">
-                      Add deposits and withdrawals to track capital changes throughout the year.
+                  <div className="py-3 space-y-3">
+                    <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                      Add deposits and withdrawals to track capital changes
                     </p>
 
                     {/* Add New Capital Change */}
-                    <div className="border border-divider rounded-lg p-4 bg-default-50 dark:bg-default-100">
-                      <h4 className="font-semibold mb-3">Add Capital Change</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="border border-divider/50 rounded-lg p-3 bg-background/50">
+                      <h4 className="font-medium text-sm mb-3 flex items-center gap-2">
+                        <Icon icon="lucide:plus-circle" className="w-4 h-4 text-primary" />
+                        Add Capital Change
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <Select
                           label="Month"
                           selectedKeys={[selectedMonth]}
@@ -435,7 +602,7 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                     {/* Add New Monthly Override */}
                     <div className="border border-divider rounded-lg p-4 bg-default-50 dark:bg-default-100">
                       <h4 className="font-semibold mb-3">Add Monthly Override</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         <Select
                           label="Month"
                           selectedKeys={[overrideMonth]}
@@ -475,7 +642,7 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                           step="1000"
                           startContent={<span className="text-default-400">₹</span>}
                         />
-                        <div className="md:col-span-3">
+                        <div className="sm:col-span-2 lg:col-span-3">
                           <Button
                             color="primary"
                             onPress={handleAddMonthlyOverride}
@@ -540,10 +707,65 @@ export const ProfileSettingsModal: React.FC<ProfileSettingsModalProps> = ({ isOp
                     </div>
                   </div>
                 </Tab>
+                <Tab key="milestones" title="Milestones">
+                  <div className="py-3 space-y-3">
+                    <p className="text-xs text-foreground-500 p-3 bg-content1/30 rounded-lg border border-divider/30">
+                      Track your progress and celebrate achievements
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {ALL_MILESTONES.map((milestone) => {
+                        const isAchieved = achievedMilestones.some(a => a.id === milestone.id);
+                        const achievedAt = isAchieved 
+                          ? new Date(achievedMilestones.find(a => a.id === milestone.id)?.achievedAt || '').toLocaleDateString()
+                          : null;
+                        return (
+                          <div
+                            key={milestone.id}
+                            className={`p-3 border rounded-lg flex items-center gap-3 transition-colors ${isAchieved
+                              ? 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800'
+                              : 'bg-background/50 border-divider/50 hover:bg-content1/30'
+                            }`}
+                          >
+                            <div className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center ${isAchieved
+                                ? 'bg-success-200 text-success-800 dark:bg-success-800 dark:text-success-200'
+                                : 'bg-default-200 text-default-600 dark:bg-default-700 dark:text-default-300'
+                              }`}
+                            >
+                              <Icon icon={milestone.icon} className="w-3 h-3" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h4 className={`font-medium text-xs ${isAchieved ? 'text-success-800 dark:text-success-200' : 'text-foreground'}`}>
+                                {milestone.name}
+                              </h4>
+                              <p className={`text-xs mt-0.5 ${isAchieved ? 'text-success-700 dark:text-success-300' : 'text-default-500'}`}>
+                                {milestone.description}
+                              </p>
+                              {isAchieved && (
+                                <p className="text-xs text-default-400 mt-1">
+                                  {achievedAt}
+                                </p>
+                              )}
+                            </div>
+                            {isAchieved && (
+                              <Icon icon="lucide:check-circle" className="w-4 h-4 text-success flex-shrink-0" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </Tab>
               </Tabs>
             </ModalBody>
-            <ModalFooter>
-              <Button variant="flat" onPress={onClose}>
+            <ModalFooter className="flex-shrink-0 border-t border-divider/50 px-6 py-3 bg-gradient-to-r from-background/50 to-content1/30">
+              <Button
+                variant="flat"
+                onPress={onClose}
+                size="sm"
+                className="w-full sm:w-auto min-w-20"
+                startContent={<Icon icon="lucide:x" className="w-3 h-3" />}
+              >
                 Close
               </Button>
             </ModalFooter>

@@ -44,8 +44,19 @@ export interface Trade {
   planFollowed: boolean;
   exitTrigger: string;
   proficiencyGrowthAreas: string;
+  sector?: string;
   openHeat: number;
   notes?: string;
+
+  // Accounting method specific fields
+  entryDate?: string;  // For accrual basis - when trade was initiated
+  exitDate?: string;   // For cash basis - when trade was closed
+  r?: number;          // Risk-reward ratio
+  _cashBasisExit?: {   // Cash basis specific exit information
+    date: string;
+    price: number;
+    qty: number;
+  };
 }
 
 export interface CapitalChange {

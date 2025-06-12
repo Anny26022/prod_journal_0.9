@@ -33,8 +33,8 @@ export interface MonthlyTruePortfolio {
 
 interface TruePortfolioContextType {
   // Core functions
-  getTruePortfolioSize: (month: string, year: number) => number;
-  getLatestTruePortfolioSize: () => number;
+  getTruePortfolioSize: (month: string, year: number, trades?: any[], useCashBasis?: boolean) => number;
+  getLatestTruePortfolioSize: (trades?: any[], useCashBasis?: boolean) => number;
 
   // Starting capital management
   yearlyStartingCapitals: YearlyStartingCapital[];
@@ -54,8 +54,8 @@ interface TruePortfolioContextType {
   deleteCapitalChange: (id: string) => void;
 
   // Monthly calculations
-  getMonthlyTruePortfolio: (month: string, year: number) => MonthlyTruePortfolio;
-  getAllMonthlyTruePortfolios: () => MonthlyTruePortfolio[];
+  getMonthlyTruePortfolio: (month: string, year: number, trades?: any[], useCashBasis?: boolean) => MonthlyTruePortfolio;
+  getAllMonthlyTruePortfolios: (trades?: any[], useCashBasis?: boolean) => MonthlyTruePortfolio[];
 
   // Backward compatibility
   portfolioSize: number; // Latest true portfolio size
@@ -285,34 +285,80 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   }, []);
 
   // Helper function to get trades P&L for a specific month/year
-  const getTradesPLForMonth = useCallback((month: string, year: number, trades: any[] = []): number => {
+  const getTradesPLForMonth = useCallback((month: string, year: number, trades: any[] = [], useCashBasis: boolean = false): number => {
     if (!trades || trades.length === 0) return 0;
 
-    return trades
-      .filter(trade => {
-        if (!trade.date) return false;
-        const tradeDate = new Date(trade.date);
-        const tradeMonth = tradeDate.toLocaleString('default', { month: 'short' });
-        const tradeYear = tradeDate.getFullYear();
-        return tradeMonth === month && tradeYear === year;
-      })
-      .reduce((sum, trade) => {
-        // Use plRs if available, otherwise calculate basic P&L
-        if (trade.plRs !== undefined && trade.plRs !== null) {
-          return sum + trade.plRs;
-        }
-        // Fallback calculation for trades without plRs
-        const exitedQty = trade.exitedQty || 0;
-        const avgExitPrice = trade.avgExitPrice || 0;
-        const avgEntry = trade.avgEntry || trade.entry || 0;
-        if (exitedQty > 0 && avgExitPrice > 0 && avgEntry > 0) {
-          const pl = trade.buySell === 'Buy'
-            ? (avgExitPrice - avgEntry) * exitedQty
-            : (avgEntry - avgExitPrice) * exitedQty;
-          return sum + pl;
-        }
-        return sum;
-      }, 0);
+    if (useCashBasis) {
+      // Cash basis: P&L is attributed to the month when trades are exited/closed
+      const result = trades
+        .filter(trade => {
+          // Only include trades that have exits (closed or partial)
+          return trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial';
+        })
+        .reduce((sum, trade) => {
+          let monthPL = 0;
+
+          // Check each exit and attribute P&L to the respective exit months
+          const exits = [
+            { date: trade.exit1Date, qty: trade.exit1Qty || 0, price: trade.exit1Price || 0 },
+            { date: trade.exit2Date, qty: trade.exit2Qty || 0, price: trade.exit2Price || 0 },
+            { date: trade.exit3Date, qty: trade.exit3Qty || 0, price: trade.exit3Price || 0 }
+          ].filter(exit => exit.date && exit.qty > 0 && exit.price > 0);
+
+          // Calculate P&L for exits in this specific month/year
+          exits.forEach(exit => {
+            const exitDate = new Date(exit.date);
+            // Use consistent month name conversion
+            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const exitMonth = monthNames[exitDate.getMonth()];
+            const exitYear = exitDate.getFullYear();
+
+            if (exitMonth === month && exitYear === year) {
+              // Calculate P&L for this specific exit
+              const avgEntry = trade.avgEntry || trade.entry || 0;
+              if (avgEntry > 0) {
+                const exitPL = trade.buySell === 'Buy'
+                  ? (exit.price - avgEntry) * exit.qty
+                  : (avgEntry - exit.price) * exit.qty;
+                monthPL += exitPL;
+              }
+            }
+          });
+
+          return sum + monthPL;
+        }, 0);
+
+      return result;
+    } else {
+      // Accrual basis: P&L is attributed to the month when trades are initiated (current behavior)
+      return trades
+        .filter(trade => {
+          if (!trade.date) return false;
+          const tradeDate = new Date(trade.date);
+          // Use consistent month name conversion
+          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const tradeMonth = monthNames[tradeDate.getMonth()];
+          const tradeYear = tradeDate.getFullYear();
+          return tradeMonth === month && tradeYear === year;
+        })
+        .reduce((sum, trade) => {
+          // Use plRs if available, otherwise calculate basic P&L
+          if (trade.plRs !== undefined && trade.plRs !== null) {
+            return sum + trade.plRs;
+          }
+          // Fallback calculation for trades without plRs
+          const exitedQty = trade.exitedQty || 0;
+          const avgExitPrice = trade.avgExitPrice || 0;
+          const avgEntry = trade.avgEntry || trade.entry || 0;
+          if (exitedQty > 0 && avgExitPrice > 0 && avgEntry > 0) {
+            const pl = trade.buySell === 'Buy'
+              ? (avgExitPrice - avgEntry) * exitedQty
+              : (avgEntry - avgExitPrice) * exitedQty;
+            return sum + pl;
+          }
+          return sum;
+        }, 0);
+    }
   }, []);
 
   // Helper function to get capital changes for a specific month/year
@@ -321,7 +367,9 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
       .filter(change => {
         if (!change.date) return false;
         const changeDate = new Date(change.date);
-        const changeMonth = changeDate.toLocaleString('default', { month: 'short' });
+        // Use consistent month name conversion
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const changeMonth = monthNames[changeDate.getMonth()];
         const changeYear = changeDate.getFullYear();
         return changeMonth === month && changeYear === year;
       })
@@ -349,7 +397,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   }, []);
 
   // Core function to calculate monthly true portfolio with memoization
-  const calculateMonthlyTruePortfolio = useCallback((month: string, year: number, trades: any[] = [], memo: Map<string, MonthlyTruePortfolio> = new Map(), minOverallDate: Date | null = null): MonthlyTruePortfolio => {
+  const calculateMonthlyTruePortfolio = useCallback((month: string, year: number, trades: any[] = [], memo: Map<string, MonthlyTruePortfolio> = new Map(), minOverallDate: Date | null = null, useCashBasis: boolean = false): MonthlyTruePortfolio => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
     // Normalize the month name
@@ -370,6 +418,19 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
 
     const currentMonthDate = new Date(year, monthIndex, 1);
     
+    // Base case: If current month is before the overall minimum date, return zero capital.
+    // This prevents infinite recursion when going too far back in time.
+    if (minOverallDate && currentMonthDate < minOverallDate) {
+      return {
+        month: normalizedMonth,
+        year,
+        startingCapital: 0,
+        capitalChanges: 0,
+        pl: 0,
+        finalCapital: 0
+      };
+    }
+    
     // Check for monthly starting capital override first
     const override = getMonthlyStartingCapitalOverride(normalizedMonth, year);
     if (override !== null) {
@@ -389,7 +450,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
         prevYear = year - 1;
       }
 
-      const prevMonthData = calculateMonthlyTruePortfolio(prevMonth, prevYear, trades, memo, minOverallDate); // Pass minOverallDate recursively
+      const prevMonthData = calculateMonthlyTruePortfolio(prevMonth, prevYear, trades, memo, minOverallDate, useCashBasis); // Pass minOverallDate and useCashBasis recursively
       startingCapital = prevMonthData.finalCapital;
     }
 
@@ -400,7 +461,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
     const revisedStartingCapital = startingCapital + capitalChangesAmount;
 
     // Get P&L for this month
-    const pl = getTradesPLForMonth(normalizedMonth, year, trades);
+    const pl = getTradesPLForMonth(normalizedMonth, year, trades, useCashBasis);
 
     // Final capital = revised starting capital + P&L
     const finalCapital = revisedStartingCapital + pl;
@@ -419,14 +480,45 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   }, [getYearlyStartingCapital, getCapitalChangesForMonth, getTradesPLForMonth, normalizeMonth, getMonthlyStartingCapitalOverride]);
 
   // Public function to get monthly true portfolio
-  const getMonthlyTruePortfolio = useCallback((month: string, year: number, trades: any[] = []): MonthlyTruePortfolio => {
-    return calculateMonthlyTruePortfolio(month, year, trades);
-  }, [calculateMonthlyTruePortfolio]);
+  const getMonthlyTruePortfolio = useCallback((month: string, year: number, trades: any[] = [], useCashBasis: boolean = false): MonthlyTruePortfolio => {
+    const memo = new Map<string, MonthlyTruePortfolio>();
+
+    // Determine the earliest and latest dates with data (trades or capital changes)
+    let minOverallDate: Date | null = null;
+
+    [...trades, ...capitalChanges].forEach(item => {
+        if (item.date) {
+            const itemDate = new Date(item.date);
+            if (!minOverallDate || itemDate < minOverallDate) {
+                minOverallDate = itemDate;
+            }
+        }
+    });
+
+    // Also consider yearly starting capitals for the earliest date
+    yearlyStartingCapitals.forEach(capital => {
+        const capitalDate = new Date(capital.year, 0, 1); // January 1st of the capital year
+        if (!minOverallDate || capitalDate < minOverallDate) {
+            minOverallDate = capitalDate;
+        }
+    });
+
+    // If there's no data at all, fallback to current year
+    if (!minOverallDate) {
+        minOverallDate = new Date(new Date().getFullYear(), 0, 1); // January 1st of current year
+    }
+
+    // Adjust minOverallDate to the beginning of its month
+    minOverallDate.setDate(1);
+    minOverallDate.setHours(0, 0, 0, 0);
+
+    return calculateMonthlyTruePortfolio(month, year, trades, memo, minOverallDate, useCashBasis);
+  }, [calculateMonthlyTruePortfolio, yearlyStartingCapitals, capitalChanges]);
 
   // Get true portfolio size for a specific month/year
-  const getTruePortfolioSize = useCallback((month: string, year: number, trades: any[] = []): number => {
+  const getTruePortfolioSize = useCallback((month: string, year: number, trades: any[] = [], useCashBasis: boolean = false): number => {
     try {
-      const monthlyData = getMonthlyTruePortfolio(month, year, trades);
+      const monthlyData = getMonthlyTruePortfolio(month, year, trades, useCashBasis);
       return monthlyData.finalCapital;
     } catch (error) {
       console.warn(`Error getting true portfolio size for ${month} ${year}:`, error);
@@ -435,13 +527,13 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   }, [getMonthlyTruePortfolio]);
 
   // Get latest true portfolio size
-  const getLatestTruePortfolioSize = useCallback((trades: any[] = []): number => {
+  const getLatestTruePortfolioSize = useCallback((trades: any[] = [], useCashBasis: boolean = false): number => {
     try {
       const currentDate = new Date();
       const currentMonth = currentDate.toLocaleString('default', { month: 'short' });
       const currentYear = currentDate.getFullYear();
 
-      return getTruePortfolioSize(currentMonth, currentYear, trades);
+      return getTruePortfolioSize(currentMonth, currentYear, trades, useCashBasis);
     } catch (error) {
       console.warn('Error calculating latest true portfolio size:', error);
       return 100000; // Fallback value
@@ -449,7 +541,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
   }, [getTruePortfolioSize]);
 
   // Get all monthly true portfolios for a year or range
-  const getAllMonthlyTruePortfolios = useCallback((trades: any[] = []): MonthlyTruePortfolio[] => {
+  const getAllMonthlyTruePortfolios = useCallback((trades: any[] = [], useCashBasis: boolean = false): MonthlyTruePortfolio[] => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const result: MonthlyTruePortfolio[] = [];
     const memo = new Map<string, MonthlyTruePortfolio>();
@@ -504,7 +596,7 @@ export const TruePortfolioProvider = ({ children }: { children: ReactNode }) => 
         const month = months[currentDate.getMonth()]; // Get short month name
 
         try {
-            const monthlyData = calculateMonthlyTruePortfolio(month, year, trades, memo, minOverallDate); // Pass minOverallDate
+            const monthlyData = calculateMonthlyTruePortfolio(month, year, trades, memo, minOverallDate, useCashBasis); // Pass minOverallDate and useCashBasis
             result.push(monthlyData);
         } catch (error) {
             // Skip months with no data

@@ -17,6 +17,8 @@ import 'chartjs-adapter-date-fns';
 import { calcXIRR } from '../../utils/tradeCalculations';
 import { useTrades } from '../../hooks/use-trades';
 import { useTruePortfolioWithTrades } from '../../hooks/use-true-portfolio-with-trades';
+import { useAccountingMethod } from '../../context/AccountingMethodContext';
+import { calculateTradePL } from '../../utils/accountingUtils';
 
 // Register ChartJS components
 ChartJS.register(
@@ -49,6 +51,8 @@ const dateRanges: DateRange[] = [
 
 export const EquityCurve: React.FC = () => {
   const { trades } = useTrades();
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
   const { portfolioSize, getAllMonthlyTruePortfolios } = useTruePortfolioWithTrades(trades);
   const monthlyPortfolios = getAllMonthlyTruePortfolios();
   const [selectedRange, setSelectedRange] = React.useState<string>('1M');
@@ -73,12 +77,13 @@ export const EquityCurve: React.FC = () => {
         start = new Date(fyYear, 3, 1); // April 1st
         break;
       case 'ALL':
-        // Find earliest trade or capital change date
-        const allDates = [
-          ...trades.map(t => new Date(t.date)),
-          ...capitalChanges.map(c => new Date(c.date))
-        ];
-        start = new Date(Math.min(...allDates.map(d => d.getTime())));
+        // Find earliest trade date
+        const allDates = trades.map(t => new Date(t.date));
+        if (allDates.length > 0) {
+          start = new Date(Math.min(...allDates.map(d => d.getTime())));
+        } else {
+          start = new Date(now.getFullYear(), 0, 1); // Default to start of year
+        }
         break;
       default:
         start = new Date(now.getTime() - (range.days * 24 * 60 * 60 * 1000));
@@ -100,7 +105,7 @@ export const EquityCurve: React.FC = () => {
         })
         .map(t => ({
           date: new Date(t.date),
-          amount: t.plRs || 0,
+          amount: calculateTradePL(t, useCashBasis),
           type: 'trade' as const
         })),
       // Capital changes are now integrated into monthly portfolios
@@ -146,7 +151,7 @@ export const EquityCurve: React.FC = () => {
     setXirrValue(xirrResult);
 
     return dataPoints;
-  }, [getDateRange, trades, monthlyPortfolios, portfolioSize]);
+  }, [getDateRange, trades, monthlyPortfolios, portfolioSize, useCashBasis]);
 
   const chartData = React.useMemo(() => {
     const dataPoints = calculateEquityCurve();

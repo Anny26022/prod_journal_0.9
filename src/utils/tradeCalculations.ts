@@ -689,9 +689,13 @@ export function calculateMaxDrawdown(dailyPortfolioValues: Map<number, number>):
     if (value > peak) {
       peak = value;
     }
-    const drawdown = (peak - value) / peak;
-    if (drawdown > maxDrawdown) {
-      maxDrawdown = drawdown;
+
+    // Only calculate drawdown if peak is positive
+    if (peak > 0) {
+      const drawdown = (peak - value) / peak;
+      if (drawdown > maxDrawdown) {
+        maxDrawdown = drawdown;
+      }
     }
   }
   return maxDrawdown; // Returns as a percentage (e.g., 0.10 for 10%)
@@ -701,11 +705,18 @@ export function calculateMaxDrawdown(dailyPortfolioValues: Map<number, number>):
 export function calculateDownsideDeviation(returns: number[], targetReturn: number = 0): number {
   if (returns.length === 0) return 0;
 
-  const downsideReturns = returns.filter(r => r < targetReturn);
-  if (downsideReturns.length === 0) return 0;
+  // Calculate downside deviation using all returns, but only penalize negative deviations
+  const sumOfSquaredDownsideDeviations = returns.reduce((sum, r) => {
+    if (r < targetReturn) {
+      return sum + Math.pow(r - targetReturn, 2);
+    }
+    return sum;
+  }, 0);
 
-  const sumOfSquaredDifferences = downsideReturns.reduce((sum, r) => sum + Math.pow(r - targetReturn, 2), 0);
-  const downsideVariance = sumOfSquaredDifferences / downsideReturns.length; // Use downsideReturns.length for population std dev
+  if (sumOfSquaredDownsideDeviations === 0) return 0;
+
+  // Use total number of observations for denominator (standard approach)
+  const downsideVariance = sumOfSquaredDownsideDeviations / returns.length;
   return Math.sqrt(downsideVariance);
 }
 
@@ -725,7 +736,11 @@ export function calculateCalmarRatio(
   annualizedReturn: number,
   maxDrawdown: number // As a decimal, e.g., 0.10 for 10%
 ): number {
-  if (maxDrawdown === 0) return 0; // Still keep strict zero check for maxDrawdown
+  const EPSILON = 1e-9; // Define a small epsilon for near-zero checks
+  if (Math.abs(maxDrawdown) < EPSILON) {
+    // If there's no drawdown, return a high value if returns are positive, 0 otherwise
+    return annualizedReturn > 0 ? 999 : 0;
+  }
   return annualizedReturn / maxDrawdown;
 }
 

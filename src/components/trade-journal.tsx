@@ -37,6 +37,8 @@ import { calcSLPercent, calcHoldingDays, calcUnrealizedPL, calcRealizedPL_FIFO, 
 import { fetchPriceTicks } from '../utils/priceTickApi';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import { useAccountingMethod } from "../context/AccountingMethodContext";
+import { calculateTradePL } from "../utils/accountingUtils";
 // Removed Supabase import - using localStorage only
 
 // localStorage helpers for misc data
@@ -104,12 +106,12 @@ export const TradeJournal = React.memo(function TradeJournal({
   toggleFullscreen,
   isFullscreen
 }: TradeJournalProps) {
-  const { 
-    trades, 
-    addTrade, 
-    updateTrade, 
-    deleteTrade, 
-    isLoading, 
+  const {
+    trades,
+    addTrade,
+    updateTrade,
+    deleteTrade,
+    isLoading,
     searchQuery,
     setSearchQuery,
     statusFilter,
@@ -119,8 +121,10 @@ export const TradeJournal = React.memo(function TradeJournal({
     visibleColumns,
     setVisibleColumns
   } = useTrades();
-  
+
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
 
   // State for inline editing
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -143,19 +147,26 @@ export const TradeJournal = React.memo(function TradeJournal({
       });
   }, [trades, searchQuery, statusFilter]);
 
-  // Memoize trade statistics calculations
+  // Memoize trade statistics calculations based on accounting method
   const tradeStats = useMemo(() => {
     const openPositions = processedTrades.filter(t => t.positionStatus === "Open" || t.positionStatus === "Partial");
     const closedTrades = processedTrades.filter(t => t.positionStatus === "Closed");
-    const winningTrades = closedTrades.filter(t => t.plRs > 0);
-    
+
+    // Calculate P/L based on accounting method
+    const tradesWithAccountingPL = processedTrades.map(trade => ({
+      ...trade,
+      accountingPL: calculateTradePL(trade, useCashBasis)
+    }));
+
+    const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0);
+
     return {
       totalTrades: processedTrades.length,
       openPositionsCount: openPositions.length,
-      winRate: closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0,
-      totalPL: processedTrades.reduce((sum, t) => sum + (t.plRs || 0), 0)
+      winRate: tradesWithAccountingPL.length > 0 ? (winningTrades.length / tradesWithAccountingPL.length) * 100 : 0,
+      totalPL: tradesWithAccountingPL.reduce((sum, t) => sum + (t.accountingPL || 0), 0)
     };
-  }, [processedTrades]);
+  }, [processedTrades, useCashBasis]);
 
   // Defer heavy calculations using requestIdleCallback
   useEffect(() => {
@@ -376,6 +387,8 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
+
+
   // List of calculated fields that should not be editable
   const nonEditableFields = [
     // Calculated fields
@@ -444,17 +457,7 @@ export const TradeJournal = React.memo(function TradeJournal({
         updatedTrade.openHeat = calcTradeOpenHeat(updatedTrade, portfolioSize, getPortfolioSize);
       }
 
-      // Validation: Pyramid/Exit dates cannot be before entry date
-      if ([
-        'pyramid1Date', 'pyramid2Date', 'exit1Date', 'exit2Date', 'exit3Date'
-      ].includes(field as string)) {
-        const entryDate = new Date(tradeToUpdate.date);
-        const newDate = new Date(parsedValue);
-        if (newDate < entryDate) {
-          window.alert('Pyramid/Exit date cannot be earlier than Entry date.');
-          return;
-        }
-      }
+
 
       // Update immediately without debouncing to prevent flickering
       try {
@@ -1271,9 +1274,10 @@ export const TradeJournal = React.memo(function TradeJournal({
 
     const openImpact = portfolioSize > 0 ? (unrealizedPL / portfolioSize) * 100 : 0;
 
+    // Calculate realized P/L based on accounting method
     const realizedPL = trades
       .filter(trade => trade.positionStatus !== 'Open')
-      .reduce((sum, trade) => sum + trade.plRs, 0);
+      .reduce((sum, trade) => sum + calculateTradePL(trade, useCashBasis), 0);
 
     const realizedImpact = portfolioSize > 0 ? (realizedPL / portfolioSize) * 100 : 0;
 
@@ -1283,7 +1287,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       totalRealizedPL: realizedPL,
       realizedPfImpact: realizedImpact
     };
-  }, [trades, portfolioSize]);
+  }, [trades, portfolioSize, useCashBasis]);
 
 
 
@@ -1429,7 +1433,7 @@ export const TradeJournal = React.memo(function TradeJournal({
                   <Icon icon="lucide:download" className="text-base" />
                 </Button>
               </DropdownTrigger>
-              <DropdownMenu 
+              <DropdownMenu
                 aria-label="Export options"
                 onAction={(key) => handleExport(key as 'csv' | 'xlsx')}
               >
@@ -1461,10 +1465,17 @@ export const TradeJournal = React.memo(function TradeJournal({
           tooltip: "Number of trades that are currently open."
         }, {
           title: statsTitle.winRate,
-          value: trades.length > 0 ? ((trades.filter(t => t.plRs > 0).length / trades.length) * 100).toFixed(2) + '%' : '0.00%',
+          value: (() => {
+            const tradesWithAccountingPL = trades.map(trade => ({
+              ...trade,
+              accountingPL: calculateTradePL(trade, useCashBasis)
+            }));
+            const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0);
+            return tradesWithAccountingPL.length > 0 ? ((winningTrades.length / tradesWithAccountingPL.length) * 100).toFixed(2) + '%' : '0.00%';
+          })(),
           icon: "lucide:target",
           color: "success",
-          tooltip: "Percentage of trades that are profitable."
+          tooltip: `Percentage of trades that are profitable (${useCashBasis ? 'Cash Basis' : 'Accrual Basis'}).`
         }].map((stat, idx) => (
           <div key={stat.title} className="flex items-center gap-2">
             <StatsCard 
@@ -1505,6 +1516,15 @@ export const TradeJournal = React.memo(function TradeJournal({
                 </div>
                 <div className="text-foreground-400">
                   This is the % of your portfolio that is realized as profit/loss.
+                </div>
+                <div className="text-warning-600 mt-2">
+                  <strong>Accounting Method:</strong> {useCashBasis ? 'Cash Basis' : 'Accrual Basis'}
+                </div>
+                <div className="text-xs text-foreground-400">
+                  {useCashBasis
+                    ? "P/L attributed to exit dates"
+                    : "P/L attributed to entry dates"
+                  }
                 </div>
               </>
             }

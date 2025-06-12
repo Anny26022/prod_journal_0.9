@@ -4,53 +4,56 @@ import { Icon } from "@iconify/react";
 import { motion } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { useTrades } from "../../hooks/use-trades";
+import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
 
 export const TaxMetricsCards: React.FC<{ isEditMode: boolean }> = ({ isEditMode }) => {
   const { trades } = useTrades();
-  const totalTrades = trades.length;
-  const winTrades = trades.filter(t => t.plRs > 0);
-  const winRate = totalTrades > 0 ? (winTrades.length / totalTrades) * 100 : 0;
-  const grossPL = trades.reduce((sum, t) => sum + (t.plRs || 0), 0);
+  const { totalTrades, winRate, grossPL, useCashBasis } = useAccountingCalculations(trades);
+  const { displayName, description } = useAccountingMethodDisplay();
+
   // If you have taxes in Trade, subtract here. For now, netPL = grossPL
   const netPL = grossPL;
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <MetricCard 
-        title="Total Trades"
-        value={totalTrades.toString()}
-        icon="lucide:activity"
-        color="primary"
-        change=""
-        isPositive={true}
-        isEditMode={isEditMode}
-      />
-      <MetricCard 
-        title="Win Rate"
-        value={winRate.toFixed(2) + '%'}
-        icon="lucide:target"
-        color="success"
-        change=""
-        isPositive={true}
-        isEditMode={isEditMode}
-      />
-      <MetricCard 
-        title="Gross P/L"
-        value={grossPL.toLocaleString('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 })}
-        icon="lucide:trending-up"
-        color="warning"
-        change=""
-        isPositive={grossPL >= 0}
-        isEditMode={isEditMode}
-      />
-      <MetricCard 
-        title="Net P/L"
-        value={netPL.toLocaleString('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 })}
-        icon="lucide:wallet"
-        color="secondary"
-        change=""
-        isPositive={netPL >= 0}
-        isEditMode={isEditMode}
-      />
+    <div className="space-y-4">
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <MetricCard
+          title="Total Trades"
+          value={totalTrades.toString()}
+          icon="lucide:activity"
+          color="primary"
+          change=""
+          isPositive={true}
+          isEditMode={isEditMode}
+        />
+        <MetricCard
+          title="Win Rate"
+          value={winRate.toFixed(2) + '%'}
+          icon="lucide:target"
+          color="success"
+          change=""
+          isPositive={true}
+          isEditMode={isEditMode}
+        />
+        <MetricCard
+          title="Gross P/L"
+          value={grossPL.toLocaleString('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 })}
+          icon="lucide:trending-up"
+          color="warning"
+          change=""
+          isPositive={grossPL >= 0}
+          isEditMode={isEditMode}
+        />
+        <MetricCard
+          title="Net P/L"
+          value={netPL.toLocaleString('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 2 })}
+          icon="lucide:wallet"
+          color="secondary"
+          change=""
+          isPositive={netPL >= 0}
+          isEditMode={isEditMode}
+        />
+      </div>
     </div>
   );
 };
