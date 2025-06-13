@@ -21,6 +21,7 @@ import {
   calcPFImpact,
   calcRealizedPL_FIFO
 } from "../utils/tradeCalculations";
+import { calculateTradePL } from "../utils/accountingUtils";
 // Removed Supabase import - using localStorage only
 
 // Define SortDirection type compatible with HeroUI Table
@@ -198,8 +199,8 @@ function clearAllTradeAndSettingsData() {
 }
 
 // Utility to recalculate all calculated fields for all trades
-// This function is now a pure function and takes getTruePortfolioSize as an explicit argument.
-function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: string, year: number) => number): Trade[] {
+// This function is now a pure function and takes getTruePortfolioSize and accounting method as explicit arguments.
+function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: string, year: number) => number, useCashBasis: boolean = false): Trade[] {
   // Sort trades by date (or tradeNo as fallback) for cummPf calculation
   const sorted = [...trades].sort((a, b) => {
     if (a.date && b.date) {
@@ -301,10 +302,12 @@ function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: str
 
     const entryLotsForFifo = allEntries.map(e => ({ price: e.price, qty: e.qty }));
     const exitLotsForFifo = allExits.map(e => ({ price: e.price, qty: e.qty }));
-    
+
     const plRs = exitedQty > 0 ? calcRealizedPL_FIFO(entryLotsForFifo, exitLotsForFifo, trade.buySell as 'Buy' | 'Sell') : 0;
-    
-    const pfImpact = calcPFImpact(plRs, tradePortfolioSize);
+
+    // Calculate accounting-aware P/L for pfImpact
+    const accountingAwarePL = calculateTradePL({...trade, plRs}, useCashBasis);
+    const pfImpact = calcPFImpact(accountingAwarePL, tradePortfolioSize);
     
     const finalOpenQty = Math.max(0, openQty);
 
@@ -331,11 +334,46 @@ function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: str
   });
 
   // Second pass for cumulative calculations like cummPf
+  // Note: We'll calculate accounting-aware values at display time to improve performance
   return calculatedTrades.map((trade, idx) => {
     if (idx === 0) runningCummPf = 0; // Reset for each fresh calculation run
-    runningCummPf += trade.pfImpact;
+
+    // For cumulative PF, we still need to calculate based on accounting method
+    // but we'll store both accrual and cash basis values to avoid recalculation
+    const accrualPL = trade.plRs || 0;
+    const cashPL = calculateTradePL(trade, true); // Cash basis P/L
+
+    // Get portfolio size for this trade's date
+    const tradePortfolioSize = getTruePortfolioSize ?
+      (() => {
+        try {
+          const tradeDate = new Date(trade.date);
+          const month = tradeDate.toLocaleString('default', { month: 'short' });
+          const year = tradeDate.getFullYear();
+          return getTruePortfolioSize(month, year) || 100000;
+        } catch {
+          return 100000;
+        }
+      })() : 100000;
+
+    // Calculate PF impact for both methods and store them
+    const accrualPfImpact = trade.positionStatus !== 'Open' ?
+      calcPFImpact(accrualPL, tradePortfolioSize) : 0;
+    const cashPfImpact = trade.positionStatus !== 'Open' ?
+      calcPFImpact(cashPL, tradePortfolioSize) : 0;
+
+    // Use the appropriate method for cumulative calculation
+    const currentPfImpact = useCashBasis ? cashPfImpact : accrualPfImpact;
+    runningCummPf += currentPfImpact;
+
+    // Store both values to avoid recalculation at display time
     return {
       ...trade,
+      // Store both accounting method values
+      _accrualPL: accrualPL,
+      _cashPL: cashPL,
+      _accrualPfImpact: accrualPfImpact,
+      _cashPfImpact: cashPfImpact,
       cummPf: runningCummPf,
     };
   });
@@ -369,6 +407,9 @@ export const useTrades = () => {
   const { accountingMethod } = useAccountingMethod();
   const useCashBasis = accountingMethod === 'cash';
 
+  // Track previous accounting method to avoid unnecessary recalculations
+  const prevAccountingMethodRef = React.useRef<string>(accountingMethod);
+
   // Get true portfolio functions - use empty array to avoid circular dependency
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades([]);
 
@@ -379,8 +420,8 @@ export const useTrades = () => {
   }, [getPortfolioSize]);
 
   const recalculateTradesWithCurrentPortfolio = React.useCallback((tradesToRecalculate: Trade[]) => {
-    return recalculateAllTrades(tradesToRecalculate, stableGetPortfolioSize);
-  }, [stableGetPortfolioSize]);
+    return recalculateAllTrades(tradesToRecalculate, stableGetPortfolioSize, useCashBasis);
+  }, [stableGetPortfolioSize, useCashBasis]);
 
   // Memory usage monitor
   React.useEffect(() => {
@@ -452,6 +493,26 @@ export const useTrades = () => {
     }
   }, [trades, isLoading]);
 
+  // Recalculate trades when accounting method changes (optimized to prevent excessive re-renders)
+  React.useEffect(() => {
+    // Only recalculate if accounting method actually changed
+    if (prevAccountingMethodRef.current !== accountingMethod && !isLoading && trades.length > 0) {
+      console.log(`🔄 Accounting method changed from ${prevAccountingMethodRef.current} to ${accountingMethod}, recalculating trades...`);
+
+      // Debounce the recalculation to prevent rapid successive calls
+      const timeoutId = setTimeout(() => {
+        // Use the pure function directly to avoid circular dependency
+        const recalculatedTrades = recalculateAllTrades(trades, stableGetPortfolioSize, useCashBasis);
+        setTrades(recalculatedTrades);
+      }, 100); // Small delay to batch any rapid changes
+
+      // Update the ref to track the new accounting method
+      prevAccountingMethodRef.current = accountingMethod;
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [accountingMethod]); // Only depend on accounting method to avoid circular dependencies
+
   const addTrade = React.useCallback((trade: Trade) => {
     setTrades(prev => {
       // Use the memoized recalculation helper
@@ -520,6 +581,26 @@ export const useTrades = () => {
     console.error('❌ Failed to clear trade data');
     return false;
   }, []);
+
+  // Helper function to get accounting-aware values for display (optimized with caching)
+  const getAccountingAwareValues = React.useCallback((trade: Trade) => {
+    const isAccrual = !useCashBasis;
+
+    // Use cached values when available to avoid recalculation
+    const plRs = isAccrual
+      ? (trade._accrualPL ?? trade.plRs ?? 0)
+      : (trade._cashPL ?? calculateTradePL(trade, true));
+
+    const pfImpact = isAccrual
+      ? (trade._accrualPfImpact ?? trade.pfImpact ?? 0)
+      : (trade._cashPfImpact ?? 0);
+
+    return {
+      plRs,
+      realisedAmount: plRs, // Same as plRs for display purposes
+      pfImpact,
+    };
+  }, [useCashBasis]);
 
   const filteredTrades = React.useMemo(() => {
     let result = [...trades];
@@ -633,6 +714,7 @@ export const useTrades = () => {
     setSortDescriptor,
     visibleColumns,
     setVisibleColumns,
-    clearAllTrades
+    clearAllTrades,
+    getAccountingAwareValues // Helper for getting accounting-aware display values
   };
 };

@@ -57,6 +57,12 @@ export interface Trade {
     price: number;
     qty: number;
   };
+
+  // Cached accounting values for performance optimization
+  _accrualPL?: number;      // Cached accrual basis P/L
+  _cashPL?: number;         // Cached cash basis P/L
+  _accrualPfImpact?: number; // Cached accrual basis portfolio impact
+  _cashPfImpact?: number;    // Cached cash basis portfolio impact
 }
 
 export interface CapitalChange {

@@ -118,7 +118,8 @@ export const TradeJournal = React.memo(function TradeJournal({
     sortDescriptor,
     setSortDescriptor,
     visibleColumns,
-    setVisibleColumns
+    setVisibleColumns,
+    getAccountingAwareValues
   } = useTrades();
 
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
@@ -986,40 +987,101 @@ export const TradeJournal = React.memo(function TradeJournal({
       const fieldsForTooltip = allColumns.slice(allColumns.findIndex(col => col.key === "initialQty")).filter(col => col.key !== 'openHeat');
       const tooltipContent = (
         <div className="p-3 text-xs max-w-2xl break-words">
-          <h4 className="font-semibold text-sm mb-2">Trade Details: {trade.name}</h4>
+          <div className="flex justify-between items-center mb-2">
+            <h4 className="font-semibold text-sm">Trade Details: {trade.name}</h4>
+            <div className="text-xs px-2 py-1 rounded bg-primary/20 text-primary">
+              {useCashBasis ? 'Cash Basis' : 'Accrual Basis'}
+            </div>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
             {fieldsForTooltip.map(col => {
               if (col.key === "actions") return null;
               let value = trade[col.key as keyof Trade];
+
+              // Handle accounting-aware calculations
               if (col.key === 'unrealizedPL') {
                 if (trade.positionStatus === 'Open' || trade.positionStatus === 'Partial') {
                   value = calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
                 } else {
                   value = "-";
                 }
+              } else if (col.key === 'plRs') {
+                // Use accounting-aware P/L calculation for realized P/L
+                const tooltipValues = getAccountingAwareValues(trade);
+                value = tooltipValues.plRs;
+              } else if (col.key === 'realisedAmount') {
+                // Calculate realized amount based on accounting method
+                const tooltipValues = getAccountingAwareValues(trade);
+                value = tooltipValues.realisedAmount;
+              } else if (col.key === 'pfImpact') {
+                // Calculate PF Impact based on accounting-aware P/L
+                const tooltipValues = getAccountingAwareValues(trade);
+                value = tooltipValues.pfImpact;
+              } else if (col.key === 'cummPf') {
+                // For cumulative PF, we need to recalculate based on accounting method
+                // This is complex in a tooltip context, so we'll show a note
+                value = `${Number(value).toFixed(2)}% (Note: Cumulative calculation may vary by accounting method)`;
               }
+
+              // Format values appropriately
               if (["pyramid1Date", "pyramid2Date", "exit1Date", "exit2Date", "exit3Date"].includes(col.key)) {
                 value = value ? formatDate(value as string) : "-";
               } else if (["entry", "avgEntry", "sl", "tsl", "cmp", "pyramid1Price", "pyramid2Price", "exit1Price", "exit2Price", "exit3Price", "avgExitPrice", "realisedAmount", "plRs", "unrealizedPL"].includes(col.key)) {
                 value = typeof value === 'number' ? formatCurrency(value) : value;
-              } else if (["pfImpact", "cummPf", "rewardRisk", "stockMove", "openHeat", "allocation", "slPercent"].includes(col.key)) {
-                let originalValue = Number(value);
-                value = `${originalValue.toFixed(2)}`;
-                if (col.key !== "rewardRisk" && !(col.key.includes("Price") || col.key.includes("Amount") || col.key.includes("Rs"))) {
-                   value += "%" 
+              } else if (["pfImpact", "rewardRisk", "stockMove", "openHeat", "allocation", "slPercent"].includes(col.key)) {
+                // Handle pfImpact separately since it's already calculated above
+                if (col.key !== 'pfImpact' && col.key !== 'cummPf') {
+                  let originalValue = Number(value);
+                  if (col.key === "rewardRisk") {
+                    // Format R:R properly
+                    value = originalValue > 0 ? `1:${originalValue.toFixed(2)} (${originalValue.toFixed(2)}R)` : '-';
+                  } else {
+                    value = `${originalValue.toFixed(2)}`;
+                    if (!(col.key.includes("Price") || col.key.includes("Amount") || col.key.includes("Rs"))) {
+                       value += "%";
+                    }
+                  }
+                } else if (col.key === 'pfImpact') {
+                  value = `${Number(value).toFixed(2)}%`;
                 }
               } else if (col.key === "planFollowed") {
                 value = trade.planFollowed ? "Yes" : "No";
+              } else if (col.key === 'positionSize') {
+                value = typeof value === 'number' ? Math.round(value).toString() : value;
+              } else if (col.key === 'holdingDays') {
+                value = typeof value === 'number' ? `${value} day${value !== 1 ? 's' : ''}` : value;
               } else if (value === undefined || value === null || value === ""){
                 value = "-";
               }
+
+              // Skip fields with no meaningful values
+              const shouldSkipField = (key: string, val: any) => {
+                // Skip if value is null, undefined, empty string, or "-"
+                if (val === null || val === undefined || val === '' || val === '-') return true;
+
+                // Skip zero values for specific fields that shouldn't show when zero
+                if (val === 0 && [
+                  'pyramid1Price', 'pyramid2Price', 'pyramid1Qty', 'pyramid2Qty',
+                  'exit1Price', 'exit2Price', 'exit3Price', 'exit1Qty', 'exit2Qty', 'exit3Qty',
+                  'tsl', 'rewardRisk', 'stockMove', 'pfImpact', 'cummPf', 'openHeat',
+                  'unrealizedPL', 'realisedAmount', 'plRs'
+                ].includes(key)) return true;
+
+                // Skip dates that are empty or "-"
+                if (key.includes('Date') && (val === '-' || val === '')) return true;
+
+                return false;
+              };
+
+              // Skip this field if it has no meaningful value
+              if (shouldSkipField(col.key, trade[col.key as keyof Trade])) return null;
               return (
                 <div key={col.key} className="bg-content2/40 dark:bg-content2/30 p-1.5 rounded shadow-sm overflow-hidden text-ellipsis whitespace-nowrap">
                   <span className="font-medium text-default-700 dark:text-default-300">{col.label}: </span>
                   <span className="text-default-600 dark:text-default-400">{String(value)}</span>
                 </div>
               );
-            })}
+            }).filter(Boolean)} {/* Filter out null values from skipped fields */}
           </div>
         </div>
       );
@@ -1264,9 +1326,16 @@ export const TradeJournal = React.memo(function TradeJournal({
       case "exit2Price":
       case "exit3Price":
       case "avgExitPrice":
+        return <EditableCell value={cellValue as number} type="price" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
       case "realisedAmount":
       case "plRs":
-        return <EditableCell value={cellValue as number} type="price" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        const accountingValues = getAccountingAwareValues(trade);
+        const displayValue = columnKey === "realisedAmount" ? accountingValues.realisedAmount : accountingValues.plRs;
+        return (
+          <div className={`py-1 px-2 text-right ${getValueColor(displayValue, columnKey)}`}>
+            {formatCellValue(displayValue, columnKey)}
+          </div>
+        );
       case "initialQty":
       case "pyramid1Qty":
       case "pyramid2Qty":
@@ -1281,8 +1350,20 @@ export const TradeJournal = React.memo(function TradeJournal({
       case "allocation":
       case "stockMove":
       case "openHeat":
+        return <EditableCell value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
       case "pfImpact":
+        const pfImpactValues = getAccountingAwareValues(trade);
+        return (
+          <div className="py-1 px-2 text-right">
+            {formatCellValue(pfImpactValues.pfImpact, columnKey)}
+          </div>
+        );
       case "cummPf":
+        return (
+          <div className="py-1 px-2 text-right">
+            {formatCellValue(cellValue, columnKey)}
+          </div>
+        );
       case "rewardRisk":
         return <EditableCell value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
       case "buySell":
