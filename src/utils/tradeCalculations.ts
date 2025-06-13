@@ -258,7 +258,7 @@ export function calcOpenHeat(
 }
 
 // Utility to calculate open heat for a single trade
-function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize) {
+export function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize) {
   // Get the trade date and extract month/year
   const tradeDate = new Date(trade.date);
   const month = tradeDate.toLocaleString('default', { month: 'short' });

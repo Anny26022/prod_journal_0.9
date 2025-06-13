@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { PriceTick, fetchPriceTicks, getTodayMarketOpen, isMarketOpen } from '../utils/priceTickApi';
+import { PriceTick, fetchPriceTicks, fetchPriceTicksWithFallback, getTodayMarketOpen, isMarketOpen } from '../utils/priceTickApi';
 import { isWeekend } from 'date-fns';
 
 interface ProcessedTick extends Omit<PriceTick, 'dateTime'> {
@@ -30,34 +30,62 @@ export const usePriceTicks = (symbol: string) => {
     }));
   }, [symbol]);
 
-  // Fetch data for the current market session
+  // Fetch data for the current market session with fallback mechanism
   const fetchTicks = useCallback(async (fromDate?: Date, toDate?: Date) => {
     if (!symbol || !isMounted.current) {
       console.log('[usePriceTicks] No symbol provided or component unmounted');
       return [];
     }
-    
-    console.log(`[usePriceTicks] Attempting to fetch ticks for symbol: ${symbol}`); // Log before fetchPriceTicks
+
+    console.log(`[usePriceTicks] Attempting to fetch ticks for symbol: ${symbol}`);
     setLoading(true);
     setError(null);
-    
+
     try {
-      console.log(`[usePriceTicks] Calling fetchPriceTicks for ${symbol}`); // Log just before calling fetch
-      const data = await fetchPriceTicks(symbol, fromDate, toDate);
-      console.log('[usePriceTicks] Received data:', data);
+      console.log(`[usePriceTicks] Calling primary fetchPriceTicks for ${symbol}`);
+      let data;
+
+      try {
+        // Try primary API first
+        data = await fetchPriceTicks(symbol, fromDate, toDate);
+        console.log('[usePriceTicks] Primary API success:', data);
+      } catch (primaryError) {
+        console.warn('[usePriceTicks] Primary API failed, trying fallback:', primaryError);
+
+        // If primary fails, try fallback mechanism
+        data = await fetchPriceTicksWithFallback(symbol, fromDate, toDate);
+        console.log('[usePriceTicks] Fallback API success:', data);
+      }
+
       const processed = processTicks(data);
       console.log('[usePriceTicks] Processed ticks:', processed);
-      
+
       if (isMounted.current) {
         setPriceTicks(processed);
         setLastUpdated(new Date());
+        // Clear any previous errors on success
+        setError(null);
       }
-      
+
       return processed;
     } catch (err) {
       if (isMounted.current) {
-        console.error('[usePriceTicks] Error fetching price ticks:', err);
-        setError(err instanceof Error ? err : new Error('Failed to fetch price ticks'));
+        console.error('[usePriceTicks] All API attempts failed:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Failed to fetch price ticks';
+
+        // Provide more specific error messages for common issues
+        let userFriendlyError = errorMessage;
+        if (errorMessage.includes('525') || errorMessage.includes('SSL')) {
+          userFriendlyError = 'SSL connection failed. The API server may be temporarily unavailable.';
+        } else if (errorMessage.includes('CORS')) {
+          userFriendlyError = 'Cross-origin request blocked. Please check API configuration.';
+        } else if (errorMessage.includes('timeout')) {
+          userFriendlyError = 'Request timed out. Please check your internet connection.';
+        } else if (errorMessage.includes('404')) {
+          userFriendlyError = 'API endpoint not found. The service may be temporarily unavailable.';
+        }
+
+        setError(new Error(userFriendlyError));
       }
       return [];
     } finally {
@@ -76,42 +104,98 @@ export const usePriceTicks = (symbol: string) => {
     }
   }, []);
 
-  // Start polling with conditional interval
+  // Helper function to determine if it's after-hours weekday (12:00 AM to 9:15 AM IST)
+  const isAfterHoursWeekday = useCallback((): boolean => {
+    const now = new Date();
+    const day = now.getDay();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+
+    // Only applies to weekdays (Monday=1 to Friday=5)
+    if (day === 0 || day === 6) return false;
+
+    // Check if time is between 12:00 AM (00:00) and 9:15 AM (09:15)
+    if (hours < 9 || (hours === 9 && minutes < 15)) {
+      return true;
+    }
+
+    return false;
+  }, []);
+
+  // Start polling with conditional interval based on market status, weekends, and after-hours
   const startPolling = useCallback(() => {
     // Clear any existing interval first
     stopPolling();
 
     const now = new Date();
-    const pollingInterval = isMarketOpen() ? 60000 : 600000; // 1 minute if open, 10 minutes if closed
-    const marketStatus = isMarketOpen() ? 'Open' : 'Closed';
+    const isCurrentlyWeekend = isWeekend(now);
+    const isCurrentlyMarketOpen = isMarketOpen();
+    const isCurrentlyAfterHours = isAfterHoursWeekday();
 
-    console.log(`[usePriceTicks] Starting polling for ${symbol} with interval: ${pollingInterval / 1000}s (Market: ${marketStatus})`);
+    // Determine polling interval based on market status, weekend, and after-hours
+    let pollingInterval: number;
+    let marketStatus: string;
 
-    // Initial fetch
-    fetchTicks(getTodayMarketOpen(), now);
-    
+    if (isCurrentlyWeekend) {
+      pollingInterval = 1800000; // 30 minutes on weekends (less frequent)
+      marketStatus = 'Weekend';
+    } else if (isCurrentlyAfterHours) {
+      pollingInterval = 600000; // 10 minutes during after-hours weekdays (12:00 AM - 9:15 AM)
+      marketStatus = 'After-Hours';
+    } else if (isCurrentlyMarketOpen) {
+      pollingInterval = 60000; // 1 minute during market hours (9:15 AM - 3:30 PM)
+      marketStatus = 'Open';
+    } else {
+      pollingInterval = 600000; // 10 minutes when market is closed on weekdays (3:30 PM - 12:00 AM)
+      marketStatus = 'Closed';
+    }
+
+    console.log(`[usePriceTicks] Starting polling for ${symbol} with interval: ${pollingInterval / 1000}s (Status: ${marketStatus})`);
+
+    // Initial fetch - let the API determine the appropriate date range and interval
+    fetchTicks();
+
     // Set up polling
     pollingIntervalRef.current = setInterval(() => {
       const currentNow = new Date();
-      const currentMarketStatus = isMarketOpen() ? 'Open' : 'Closed';
-      const currentPollingInterval = isMarketOpen() ? 60000 : 600000; // Re-check interval just in case
+      const currentIsWeekend = isWeekend(currentNow);
+      const currentIsMarketOpen = isMarketOpen();
+      const currentIsAfterHours = isAfterHoursWeekday();
 
-      // If market status or required interval changed, clear and restart polling
+      // Determine current status and interval
+      let currentPollingInterval: number;
+      let currentMarketStatus: string;
+
+      if (currentIsWeekend) {
+        currentPollingInterval = 1800000; // 30 minutes
+        currentMarketStatus = 'Weekend';
+      } else if (currentIsAfterHours) {
+        currentPollingInterval = 600000; // 10 minutes
+        currentMarketStatus = 'After-Hours';
+      } else if (currentIsMarketOpen) {
+        currentPollingInterval = 60000; // 1 minute
+        currentMarketStatus = 'Open';
+      } else {
+        currentPollingInterval = 600000; // 10 minutes
+        currentMarketStatus = 'Closed';
+      }
+
+      // If status or required interval changed, clear and restart polling
       if ((marketStatus !== currentMarketStatus) || (pollingInterval !== currentPollingInterval)) {
-          console.log(`[usePriceTicks] Market status or interval changed. Restarting polling. Old: ${marketStatus}, ${pollingInterval/1000}s. New: ${currentMarketStatus}, ${currentPollingInterval/1000}s`);
+          console.log(`[usePriceTicks] Status changed. Restarting polling. Old: ${marketStatus}, ${pollingInterval/1000}s. New: ${currentMarketStatus}, ${currentPollingInterval/1000}s`);
           stopPolling();
           startPolling(); // Restart with new interval
           return; // Exit current interval tick
       }
 
-      console.log(`[usePriceTicks] Polling for ${symbol}... (Market: ${currentMarketStatus})`);
-      fetchTicks(getTodayMarketOpen(), currentNow);
-    }, pollingInterval); // Use the determined interval
-    
+      console.log(`[usePriceTicks] Polling for ${symbol}... (Status: ${currentMarketStatus})`);
+      fetchTicks(); // Let API determine appropriate parameters
+    }, pollingInterval);
+
     return () => {
       stopPolling();
     };
-  }, [symbol, fetchTicks, stopPolling]); // Added stopPolling to dependencies
+  }, [symbol, fetchTicks, stopPolling, isAfterHoursWeekday]);
 
   // Initialize and clean up
   useEffect(() => {

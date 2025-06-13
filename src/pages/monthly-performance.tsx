@@ -304,8 +304,16 @@ export const MonthlyPerformanceTable: React.FC = () => {
   // Ensure we have valid data before rendering the table
   if (!computedData || computedData.length === 0) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <p>No data available</p>
+      <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+        <div className="text-default-400 mb-2">
+          <Icon icon="lucide:calendar-x" className="w-12 h-12 mx-auto mb-3 opacity-50" />
+        </div>
+        <div className="text-default-500 text-lg font-medium mb-1">
+          No monthly data available
+        </div>
+        <div className="text-default-400 text-sm">
+          Add some trades to see monthly performance breakdown
+        </div>
       </div>
     );
   }

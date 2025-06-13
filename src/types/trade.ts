@@ -63,6 +63,12 @@ export interface Trade {
   _cashPL?: number;         // Cached cash basis P/L
   _accrualPfImpact?: number; // Cached accrual basis portfolio impact
   _cashPfImpact?: number;    // Cached cash basis portfolio impact
+
+  // CMP fetching status
+  _cmpAutoFetched?: boolean; // True if CMP was auto-fetched, false if manually entered
+
+  // Bulk import optimization flag
+  _needsRecalculation?: boolean; // True if trade was imported with skipped calculations
 }
 
 export interface CapitalChange {

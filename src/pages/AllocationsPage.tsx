@@ -116,7 +116,21 @@ const AllocationsPage: React.FC = () => {
                         <TableBody 
                             items={topAllocations} 
                             isLoading={isLoading} 
-                            emptyContent={isLoading ? " " : "No open or partial positions to display."}
+                            emptyContent={
+                                isLoading ? " " : (
+                                    <div className="flex flex-col items-center justify-center py-8 px-4 text-center">
+                                        <div className="text-default-400 mb-2">
+                                            <Icon icon="lucide:pie-chart" className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                                        </div>
+                                        <div className="text-default-500 text-base font-medium mb-1">
+                                            No open positions
+                                        </div>
+                                        <div className="text-default-400 text-sm">
+                                            Open some trades to see allocation breakdown
+                                        </div>
+                                    </div>
+                                )
+                            }
                         >
                             {(item) => (
                                 <TableRow key={item.id}>

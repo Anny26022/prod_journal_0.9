@@ -13,7 +13,8 @@ import {
   Textarea,
   Divider,
   Tabs,
-  Tab
+  Tab,
+  Chip
 } from "@heroui/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "@iconify/react";
@@ -21,6 +22,7 @@ import { Trade } from "../types/trade";
 import { generateId } from "../utils/helpers";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { usePriceTicks } from "../hooks/usePriceTicks";
+import { fetchPriceTicks } from '../utils/priceTickApi';
 import {
   calcAvgEntry,
   calcPositionSize,
@@ -230,23 +232,13 @@ import * as Papa from "papaparse"; // Centralized import
     symbol: initialSymbol = "",
   }) => {
     console.log("[TradeModal] Initial Symbol:", initialSymbol); // Log initial symbol
-    const { latestPrice } = usePriceTicks(initialSymbol);
-    
-    // Update CMP when latest price changes
-    React.useEffect(() => {
-      if (latestPrice?.close && latestPrice.close > 0) {
-        console.log("[TradeModal] Updating CMP with latest price:", latestPrice.close);
-        handleChange('cmp', latestPrice.close);
-      }
-    }, [latestPrice]);
+
+    // Track if CMP was manually set by user
+    const [cmpManuallySet, setCmpManuallySet] = React.useState(false);
+
     const { trades } = useTrades();
     const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
-    // Reset form when symbol changes
-    React.useEffect(() => {
-      if (initialSymbol && mode === 'add') {
-        handleChange('name', initialSymbol);
-      }
-    }, [initialSymbol, mode]);
+    // Reset form when symbol changes - moved after handleChange is defined
 
   // Unique key for sessionStorage
   const sessionKey = React.useMemo(() => {
@@ -312,6 +304,10 @@ import * as Papa from "papaparse"; // Centralized import
       return defaultTrade;
     }
   });
+
+  // Use formData.name for price ticks to get real-time updates
+  const { latestPrice } = usePriceTicks(formData?.name || initialSymbol);
+
   const [isDirty, setIsDirty] = React.useState<boolean>(false);
   const [isAutoSaving, setIsAutoSaving] = React.useState<boolean>(false);
   const [lastSaved, setLastSaved] = React.useState<Date | null>(null);
@@ -369,6 +365,18 @@ import * as Papa from "papaparse"; // Centralized import
     sessionStorage.setItem(sessionKey + '_activeTab', activeTab);
   }, [activeTab, sessionKey]);
 
+  // Update CMP when latest price changes (only if not manually set)
+  React.useEffect(() => {
+    if (latestPrice?.close && latestPrice.close > 0 && !cmpManuallySet && formData.cmp === 0) {
+      console.log("[TradeModal] Updating CMP with latest price:", latestPrice.close);
+      setFormData(prev => ({
+        ...prev,
+        cmp: latestPrice.close,
+        _cmpAutoFetched: true
+      }));
+    }
+  }, [latestPrice, cmpManuallySet, formData.cmp]);
+
   // Clear sessionStorage on close - but only after successful save
   const [shouldClearSession, setShouldClearSession] = React.useState(false);
 
@@ -387,8 +395,8 @@ import * as Papa from "papaparse"; // Centralized import
     'totalInvestment', 'exit1Amount', 'exit2Amount', 'exit3Amount', 'totalExitAmount',
     'pnl', 'pnlPercent', 'roi', 'avgEntry', 'allocation', 'slPercent', 'exitedQty',
     'openQty', 'avgExitPrice', 'stockMove', 'rewardRisk', 'holdingDays',
-    'realisedAmount', 'plRs', 'pfImpact', 'cummPf',
-    'cmp' // Make CMP read-only
+    'realisedAmount', 'plRs', 'pfImpact', 'cummPf'
+    // 'cmp' REMOVED to allow manual entry when auto-fetch fails
   ], []);
   
   const debouncedFormData = useDebounce(formData, 300);
@@ -453,30 +461,80 @@ import * as Papa from "papaparse"; // Centralized import
   ]);
 
   // Handle form field changes
-  const handleChange = React.useCallback((field: keyof TradeModalFormData, value: any) => {
+  const handleChange = React.useCallback(async (field: keyof TradeModalFormData, value: any) => {
     // Prevent any changes to calculated fields
     if (calculatedFieldNames.includes(field as string)) {
       console.warn(`Attempted to modify read-only field: ${field}`);
       return;
     }
-    
+
     // Convert numeric fields to numbers
     const numericFields = [
-      'entry', 'sl', 'tsl', 'cmp', 'initialQty', 
+      'entry', 'sl', 'tsl', 'cmp', 'initialQty',
       'pyramid1Price', 'pyramid1Qty', 'pyramid2Price', 'pyramid2Qty',
       'exit1Price', 'exit1Qty', 'exit2Price', 'exit2Qty', 'exit3Price', 'exit3Qty'
     ];
-    
-    const processedValue = numericFields.includes(field as string) 
-      ? Number(value) || 0 
+
+    const processedValue = numericFields.includes(field as string)
+      ? Number(value) || 0
       : value;
-    
+
+    // Track if CMP was manually changed
+    if (field === 'cmp') {
+      setCmpManuallySet(true);
+    }
+
+    // If the field is 'name', fetch the latest price and update cmp (only if CMP is currently 0 or not manually set)
+    let updatedFormData = {
+      ...formData,
+      [field]: processedValue,
+      // Mark CMP as manually set if user changed it
+      ...(field === 'cmp' ? { _cmpAutoFetched: false } : {})
+    };
+
+    if (field === 'name' && processedValue && !cmpManuallySet) {
+      try {
+        console.log("[TradeModal] Fetching price for symbol:", processedValue);
+        const priceData = await fetchPriceTicks(processedValue);
+        const ticks = priceData?.data?.ticks?.[processedValue.toUpperCase()];
+        if (ticks && ticks.length > 0) {
+          const latestTick = ticks[ticks.length - 1];
+          const fetchedPrice = latestTick[4]; // index 4 is close price
+
+          // Only update CMP if it's currently 0 (not manually set) or if we successfully fetched a price
+          if (formData.cmp === 0 || fetchedPrice > 0) {
+            updatedFormData.cmp = fetchedPrice;
+            // Mark as auto-fetched
+            updatedFormData._cmpAutoFetched = true;
+            console.log("[TradeModal] Updated CMP with fetched price:", fetchedPrice);
+          }
+        } else {
+          // No price data available - keep existing CMP if it's manually set, otherwise set to 0
+          if (formData.cmp === 0) {
+            updatedFormData.cmp = 0;
+            updatedFormData._cmpAutoFetched = false;
+          }
+        }
+      } catch (err) {
+        // Fetch failed - keep existing CMP if it's manually set, otherwise set to 0
+        if (formData.cmp === 0) {
+          updatedFormData.cmp = 0;
+          updatedFormData._cmpAutoFetched = false;
+        }
+        console.warn(`Failed to fetch price for ${processedValue}:`, err);
+      }
+    }
+
     setIsDirty(true);
-    setFormData(prev => ({
-      ...prev,
-      [field]: processedValue
-    }));
-  }, [calculatedFieldNames]);
+    setFormData(updatedFormData);
+  }, [calculatedFieldNames, formData, cmpManuallySet]);
+
+  // Reset form when symbol changes
+  React.useEffect(() => {
+    if (initialSymbol && mode === 'add') {
+      handleChange('name', initialSymbol);
+    }
+  }, [initialSymbol, mode, handleChange]);
 
   // Calculate values when form is submitted
   const calculateValues = React.useCallback(() => {
@@ -731,6 +789,46 @@ import * as Papa from "papaparse"; // Centralized import
       );
     }
 
+    // Special handling for CMP field
+    if (field.name === "cmp") {
+      return (
+        <div key={field.name} className="flex flex-col gap-1">
+          <label className="text-sm font-medium text-foreground-600 flex items-center gap-2">
+            {field.label}
+            {formData._cmpAutoFetched === false && (
+              <Chip size="sm" color="warning" variant="flat" className="text-xs">
+                Manual
+              </Chip>
+            )}
+            {formData._cmpAutoFetched === true && (
+              <Chip size="sm" color="success" variant="flat" className="text-xs">
+                Auto
+              </Chip>
+            )}
+          </label>
+          <Input
+            type="number"
+            value={formData.cmp?.toString() ?? "0"}
+            onValueChange={(value) => handleChange("cmp", Number(value))}
+            variant="bordered"
+            startContent={<span className="text-default-400">₹</span>}
+            placeholder={latestPrice?.close ? `Auto: ${latestPrice.close}` : "Enter manually"}
+            isDisabled={formData._cmpAutoFetched === true}
+            description={
+              formData._cmpAutoFetched === false
+                ? "Manually entered price"
+                : formData._cmpAutoFetched === true
+                  ? "Auto-fetched from market data - not editable"
+                  : latestPrice?.close
+                    ? "Price available - will auto-update"
+                    : ""
+            }
+            className="transform-gpu"
+          />
+        </div>
+      );
+    }
+
     switch (field.type) {
       case "number":
         return (
@@ -962,35 +1060,43 @@ import * as Papa from "papaparse"; // Centralized import
 
     const handleSave = (val?: string) => {
       const finalValue = val ?? editValue;
-      if (finalValue.trim()) {
-        // Check if the value exists in stockNames
-        const exactMatch = stockNames.find(
-          name => name.toLowerCase() === finalValue.toLowerCase()
-        );
-        
-        if (exactMatch) {
-          onSave(exactMatch); // Use the exact case from database
-        } else {
-          // Try to find closest match
-          const closestMatch = findClosestMatch(finalValue);
-          if (closestMatch) {
-            const confirmed = window.confirm(
-              `"${finalValue}" not found. Did you mean "${closestMatch}"?`
-            );
-            if (confirmed) {
-              onSave(closestMatch);
-            } else {
-              // Revert to previous value if user declines suggestion
-               setEditValue(value); 
-            }
+
+      // Allow empty values to be saved (clearing the field)
+      if (!finalValue.trim()) {
+        onSave(''); // Save empty string
+        setIsEditing(false);
+        setShowDropdown(false);
+        setSelectedIndex(-1);
+        return;
+      }
+
+      // Check if the value exists in stockNames
+      const exactMatch = stockNames.find(
+        name => name.toLowerCase() === finalValue.toLowerCase()
+      );
+
+      if (exactMatch) {
+        onSave(exactMatch); // Use the exact case from database
+      } else {
+        // Try to find closest match
+        const closestMatch = findClosestMatch(finalValue);
+        if (closestMatch) {
+          const confirmed = window.confirm(
+            `"${finalValue}" not found. Did you mean "${closestMatch}"?`
+          );
+          if (confirmed) {
+            onSave(closestMatch);
           } else {
-             const addNew = window.confirm(`"${finalValue}" is not a valid stock name. Do you want to add it?`);
-             if(addNew){
-              onSave(finalValue.toUpperCase());
-             } else {
-              setEditValue(value); // Revert to previous value
-             }
+            // Revert to previous value if user declines suggestion
+             setEditValue(value);
           }
+        } else {
+           const addNew = window.confirm(`"${finalValue}" is not a valid stock name. Do you want to add it?`);
+           if(addNew){
+            onSave(finalValue.toUpperCase());
+           } else {
+            setEditValue(value); // Revert to previous value
+           }
         }
       }
       setIsEditing(false);

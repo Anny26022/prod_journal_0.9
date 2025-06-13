@@ -200,7 +200,13 @@ function clearAllTradeAndSettingsData() {
 
 // Utility to recalculate all calculated fields for all trades
 // This function is now a pure function and takes getTruePortfolioSize and accounting method as explicit arguments.
-function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: string, year: number) => number, useCashBasis: boolean = false): Trade[] {
+// Added skipExpensiveCalculations flag to optimize bulk imports
+function recalculateAllTrades(
+  trades: Trade[],
+  getTruePortfolioSize: (month: string, year: number) => number,
+  useCashBasis: boolean = false,
+  skipExpensiveCalculations: boolean = false
+): Trade[] {
   // Sort trades by date (or tradeNo as fallback) for cummPf calculation
   const sorted = [...trades].sort((a, b) => {
     if (a.date && b.date) {
@@ -210,6 +216,32 @@ function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: str
   });
 
   let runningCummPf = 0;
+
+  // If skipping expensive calculations, return trades with minimal processing
+  if (skipExpensiveCalculations) {
+    console.log(`⚡ Skipping expensive calculations for ${trades.length} trades during bulk import`);
+    return sorted.map(trade => ({
+      ...trade,
+      name: (trade.name || '').toUpperCase(),
+      // Keep existing calculated values or set minimal defaults
+      avgEntry: trade.avgEntry || trade.entry || 0,
+      positionSize: trade.positionSize || 0,
+      allocation: trade.allocation || 0,
+      slPercent: trade.slPercent || 0,
+      openQty: trade.openQty || trade.initialQty || 0,
+      exitedQty: trade.exitedQty || 0,
+      avgExitPrice: trade.avgExitPrice || 0,
+      stockMove: trade.stockMove || 0,
+      holdingDays: trade.holdingDays || 0,
+      realisedAmount: trade.realisedAmount || 0,
+      plRs: trade.plRs || 0,
+      pfImpact: trade.pfImpact || 0,
+      cummPf: trade.cummPf || 0,
+      // Mark as needing recalculation
+      _needsRecalculation: true
+    }));
+  }
+
   // First pass for individual trade calculations
   const calculatedTrades = sorted.map((trade) => {
     // Original entry and pyramid entries for calculations
@@ -222,7 +254,7 @@ function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: str
     const avgEntry = calcAvgEntry(allEntries);
     const totalInitialQty = allEntries.reduce((sum, e) => sum + e.qty, 0);
     const positionSize = calcPositionSize(avgEntry, totalInitialQty);
-    
+
     // Get the true portfolio size for the trade's month/year
     let tradePortfolioSize = 100000; // Default fallback
     if (trade.date && getTruePortfolioSize) { // Use the passed getTruePortfolioSize
@@ -235,7 +267,7 @@ function recalculateAllTrades(trades: Trade[], getTruePortfolioSize: (month: str
         tradePortfolioSize = 100000; // Fallback
       }
     }
-    
+
     const allocation = calcAllocation(positionSize, tradePortfolioSize);
     const slPercent = calcSLPercent(trade.sl, trade.entry);
 
@@ -399,6 +431,7 @@ const DEFAULT_VISIBLE_COLUMNS = [
 export const useTrades = () => {
   const [trades, setTrades] = React.useState<Trade[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [isRecalculating, setIsRecalculating] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState('');
   const [sortDescriptor, setSortDescriptor] = React.useState<SortDescriptor>({ column: 'tradeNo', direction: 'ascending' });
@@ -419,8 +452,8 @@ export const useTrades = () => {
     return getPortfolioSize(month, year);
   }, [getPortfolioSize]);
 
-  const recalculateTradesWithCurrentPortfolio = React.useCallback((tradesToRecalculate: Trade[]) => {
-    return recalculateAllTrades(tradesToRecalculate, stableGetPortfolioSize, useCashBasis);
+  const recalculateTradesWithCurrentPortfolio = React.useCallback((tradesToRecalculate: Trade[], skipExpensiveCalculations: boolean = false) => {
+    return recalculateAllTrades(tradesToRecalculate, stableGetPortfolioSize, useCashBasis, skipExpensiveCalculations);
   }, [stableGetPortfolioSize, useCashBasis]);
 
   // Memory usage monitor
@@ -487,7 +520,7 @@ export const useTrades = () => {
     if (trades.length > 0 || !isLoading) {
       const timeoutId = setTimeout(() => {
         saveTradesToLocalStorage(trades);
-      }, 500); // 500ms debounce
+      }, 100); // Reduced to 100ms for better responsiveness
 
       return () => clearTimeout(timeoutId);
     }
@@ -502,7 +535,7 @@ export const useTrades = () => {
       // Debounce the recalculation to prevent rapid successive calls
       const timeoutId = setTimeout(() => {
         // Use the pure function directly to avoid circular dependency
-        const recalculatedTrades = recalculateAllTrades(trades, stableGetPortfolioSize, useCashBasis);
+        const recalculatedTrades = recalculateAllTrades(trades, stableGetPortfolioSize, useCashBasis, false);
         setTrades(recalculatedTrades);
       }, 100); // Small delay to batch any rapid changes
 
@@ -541,6 +574,46 @@ export const useTrades = () => {
       );
       saveTradesToLocalStorage(newTrades); // Persist to localStorage
       return newTrades;
+    });
+  }, [recalculateTradesWithCurrentPortfolio]);
+
+  // Bulk import function for better performance with optimized calculations
+  const bulkImportTrades = React.useCallback((importedTrades: Trade[]) => {
+    console.log(`🚀 Starting optimized bulk import of ${importedTrades.length} trades...`);
+    const startTime = performance.now();
+
+    setTrades(prev => {
+      // Combine existing trades with imported trades
+      const combinedTrades = [...importedTrades, ...prev];
+
+      // First pass: Skip expensive calculations for faster import
+      const quickProcessedTrades = recalculateTradesWithCurrentPortfolio(combinedTrades, true);
+      saveTradesToLocalStorage(quickProcessedTrades); // Single localStorage write
+
+      const endTime = performance.now();
+      console.log(`⚡ Fast bulk import completed in ${(endTime - startTime).toFixed(2)}ms`);
+      console.log(`🔄 Scheduling full recalculation in background...`);
+
+      // Schedule full recalculation in the background after a short delay
+      setTimeout(() => {
+        const recalcStartTime = performance.now();
+        console.log(`🧮 Starting full recalculation of ${quickProcessedTrades.length} trades...`);
+        setIsRecalculating(true);
+
+        setTrades(currentTrades => {
+          const fullyCalculatedTrades = recalculateTradesWithCurrentPortfolio(currentTrades, false);
+          saveTradesToLocalStorage(fullyCalculatedTrades);
+
+          const recalcEndTime = performance.now();
+          console.log(`✅ Full recalculation completed in ${(recalcEndTime - recalcStartTime).toFixed(2)}ms`);
+          console.log(`📊 Total import + recalculation time: ${(recalcEndTime - startTime).toFixed(2)}ms`);
+
+          setIsRecalculating(false);
+          return fullyCalculatedTrades;
+        });
+      }, 100); // Small delay to allow UI to update
+
+      return quickProcessedTrades;
     });
   }, [recalculateTradesWithCurrentPortfolio]);
 
@@ -705,7 +778,9 @@ export const useTrades = () => {
     addTrade,
     updateTrade,
     deleteTrade,
+    bulkImportTrades,
     isLoading,
+    isRecalculating,
     searchQuery,
     setSearchQuery,
     statusFilter,

@@ -84,6 +84,72 @@ const getCurrentISTDate = (): Date => {
 };
 
 /**
+ * Gets the last working day (Friday or earlier if there are holidays)
+ * @param fromDate Optional starting date, defaults to current IST date
+ * @returns Date object set to the last working day
+ */
+const getLastWorkingDay = (fromDate?: Date): Date => {
+  const date = fromDate ? new Date(fromDate) : getCurrentISTDate();
+
+  // If it's Saturday (6) or Sunday (0), go back to Friday
+  while (date.getDay() === 0 || date.getDay() === 6) {
+    date.setDate(date.getDate() - 1);
+  }
+
+  return date;
+};
+
+/**
+ * Checks if current date is weekend (Saturday or Sunday) in IST
+ */
+const isWeekendIST = (): boolean => {
+  const now = getCurrentISTDate();
+  const day = now.getDay();
+  return day === 0 || day === 6; // Sunday (0) or Saturday (6)
+};
+
+/**
+ * Checks if current time is after-hours on a weekday (12:00 AM to 9:15 AM IST)
+ * This is when system date may have changed but markets haven't opened yet
+ */
+const isAfterHoursWeekday = (): boolean => {
+  const now = getCurrentISTDate();
+  const day = now.getDay();
+  const hours = now.getHours();
+  const minutes = now.getMinutes();
+
+  // Only applies to weekdays (Monday=1 to Friday=5)
+  if (day === 0 || day === 6) return false;
+
+  // Check if time is between 12:00 AM (00:00) and 9:15 AM (09:15)
+  if (hours < 9 || (hours === 9 && minutes < 15)) {
+    return true;
+  }
+
+  return false;
+};
+
+/**
+ * Gets the previous trading day, accounting for weekends and after-hours
+ * This is crucial for after-hours weekday polling when system date has changed
+ * but we need previous day's market data
+ */
+const getPreviousTradingDay = (): Date => {
+  const now = getCurrentISTDate();
+  const previousDay = new Date(now);
+
+  // Go back one day
+  previousDay.setDate(now.getDate() - 1);
+
+  // If the previous day is weekend, keep going back to Friday
+  while (previousDay.getDay() === 0 || previousDay.getDay() === 6) {
+    previousDay.setDate(previousDay.getDate() - 1);
+  }
+
+  return previousDay;
+};
+
+/**
  * Formats date to YYYY-MM-DD string in local timezone
  */
 const formatDateOnly = (date: Date): string => {
@@ -110,6 +176,39 @@ const getLastFriday = (): Date => {
 };
 
 /**
+ * Retry mechanism for API calls with exponential backoff
+ */
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> => {
+  let lastError: Error;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+
+      // Don't retry on the last attempt
+      if (attempt === maxRetries) {
+        break;
+      }
+
+      // Calculate delay with exponential backoff
+      const delay = baseDelay * Math.pow(2, attempt);
+      console.warn(`API call failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`, error);
+
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+};
+
+/**
  * Fetches price ticks for a given symbol and date range
  * @param symbol The stock symbol (e.g., 'TAJGVK')
  * @param fromDate Start date (default: today's market open)
@@ -121,53 +220,115 @@ export const fetchPriceTicks = async (
   symbol: string,
   fromDate?: Date,
   toDate?: Date,
-  interval: string = '1m'
+  interval?: string
 ): Promise<PriceTicksResponse> => {
-  try {
+  return retryWithBackoff(async () => {
     const now = getCurrentISTDate();
-    const day = now.getDay();
+    const isWeekend = isWeekendIST();
+    const isAfterHours = isAfterHoursWeekday();
     let from: Date, to: Date;
-    if ((day === 0 || day === 6) && !fromDate && !toDate) { // If weekend and no explicit dates
-      // Get last Friday
-      const lastFriday = new Date(now);
-      // Go back to Friday
-      lastFriday.setDate(now.getDate() - ((day === 0) ? 2 : 1));
-      lastFriday.setHours(9, 8, 0, 0); // Market open time
-      const fridayClose = new Date(lastFriday);
-      fridayClose.setHours(15, 30, 0, 0); // Market close time
-      from = lastFriday;
-      to = fridayClose;
+    let actualInterval: string;
+
+    // Determine interval and date range based on market status
+    if (isWeekend && !fromDate && !toDate) {
+      // Weekend: Use daily candles and get data from last working days
+      actualInterval = interval || '1d';
+
+      // Get last working day (Friday or earlier)
+      const lastWorkingDay = getLastWorkingDay();
+
+      // Set 'to' date to end of last working day
+      to = new Date(lastWorkingDay);
+      to.setHours(23, 59, 59, 999);
+
+      // Set 'from' date to cover sufficient historical data (e.g., last 30 working days)
+      from = new Date(lastWorkingDay);
+      from.setDate(from.getDate() - 45); // Go back ~45 days to ensure we get 30 working days
+      from.setHours(9, 15, 59, 0); // Market open time
+
+      console.log(`[fetchPriceTicks] Weekend mode: Using ${actualInterval} interval from ${from.toISOString()} to ${to.toISOString()}`);
+    } else if (isAfterHours && !fromDate && !toDate) {
+      // After-hours weekday (12:00 AM to 9:15 AM): Use previous trading day's data
+      actualInterval = interval || '1m';
+
+      // Get previous trading day (even if system date changed at midnight)
+      const previousTradingDay = getPreviousTradingDay();
+
+      // Set 'from' to previous trading day market open
+      from = new Date(previousTradingDay);
+      from.setHours(9, 15, 59, 0);
+
+      // Set 'to' to previous trading day end (or market close)
+      to = new Date(previousTradingDay);
+      to.setHours(23, 59, 59, 999); // Full day data
+      // Alternative: to.setHours(15, 30, 0, 0); // Market close only
+
+      console.log(`[fetchPriceTicks] After-hours weekday mode: Using ${actualInterval} interval from ${from.toISOString()} to ${to.toISOString()}`);
+      console.log(`[fetchPriceTicks] System date: ${now.toDateString()}, Using trading day: ${previousTradingDay.toDateString()}`);
+    } else if (!fromDate && !toDate) {
+      // Normal weekday during/after market hours: Use current day
+      actualInterval = interval || '1m';
+      from = getTodayMarketOpen();
+      to = new Date();
+
+      console.log(`[fetchPriceTicks] Normal weekday mode: Using ${actualInterval} interval from ${from.toISOString()} to ${to.toISOString()}`);
     } else {
+      // Explicit dates provided
+      actualInterval = interval || '1m';
       from = fromDate || getTodayMarketOpen();
       to = toDate || new Date();
+
+      console.log(`[fetchPriceTicks] Custom date mode: Using ${actualInterval} interval from ${from.toISOString()} to ${to.toISOString()}`);
     }
-    
+
     // Format dates to match the required API format (YYYY-MM-DDTHH:mm:ss+05:30)
     const formatForApi = (date: Date) => {
       const pad = (num: number) => num.toString().padStart(2, '0');
-      // Format as: YYYY-MM-DDTHH:mm:ss+05:30
+      // Format as: YYYY-MM-DDTHH:mm:ss+05:30 (URL encoded)
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}%3A${pad(date.getMinutes())}%3A${pad(date.getSeconds())}%2B05%3A30`;
     };
+
     const fromStr = formatForApi(from);
     const toStr = formatForApi(to);
     const encodedSymbol = `EQ%3A${symbol.toUpperCase()}`;
-    const url = `https://api-prod-v21.strike.money/v2/api/equity/priceticks?candleInterval=${interval}&from=${fromStr}&to=${toStr}&securities=${encodedSymbol}`;
-    
+
+    // Updated to use the correct API URL format with dynamic interval
+    const url = `https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=${actualInterval}&from=${fromStr}&to=${toStr}&securities=${encodedSymbol}`;
+
+    console.log(`[fetchPriceTicks] Making API call to: ${url}`);
+
     const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        // Add any required authentication headers here if needed
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
       },
+      // Add additional options to handle SSL issues
+      mode: 'cors',
+      cache: 'no-cache',
+      credentials: 'omit',
+      // Add timeout to prevent hanging requests
+      signal: AbortSignal.timeout(15000), // 15 second timeout
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`API request failed with status ${response.status}: ${errorText}`);
+      const errorMessage = `API request failed with status ${response.status}: ${errorText}`;
+      console.error(`[fetchPriceTicks] ${errorMessage}`);
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
-    
+    console.log(`[fetchPriceTicks] Successfully fetched data for ${symbol}:`, data);
+
     // Store Friday's close price if today is Friday and market is closed
     // This logic is still relevant for potential caching but won't prevent calls
     if (isFriday(now) && now > getTodayMarketClose()) {
@@ -185,10 +346,155 @@ export const fetchPriceTicks = async (
         }
       }
     }
-    
+
     return data;
-  } catch (error) {
-    console.error('Error fetching price ticks:', error);
-    throw error;
+  }, 3, 1000); // Retry up to 3 times with 1 second base delay
+};
+
+/**
+ * Alternative fetch function with different error handling strategies
+ * Fallback mechanism for when the primary API fails
+ */
+export const fetchPriceTicksWithFallback = async (
+  symbol: string,
+  fromDate?: Date,
+  toDate?: Date,
+  interval?: string
+): Promise<PriceTicksResponse> => {
+  const fallbackUrls = [
+    'https://api-prod-v21.strike.money',
+    'https://api.strike.money'
+  ];
+
+  let lastError: Error;
+
+  for (const baseUrl of fallbackUrls) {
+    try {
+      console.log(`[fetchPriceTicksWithFallback] Trying ${baseUrl}...`);
+
+      const now = getCurrentISTDate();
+      const isWeekend = isWeekendIST();
+      const isAfterHours = isAfterHoursWeekday();
+      let from: Date, to: Date;
+      let actualInterval: string;
+
+      // Use same logic as main function
+      if (isWeekend && !fromDate && !toDate) {
+        actualInterval = interval || '1d';
+        const lastWorkingDay = getLastWorkingDay();
+        to = new Date(lastWorkingDay);
+        to.setHours(23, 59, 59, 999);
+        from = new Date(lastWorkingDay);
+        from.setDate(from.getDate() - 45);
+        from.setHours(9, 15, 59, 0);
+      } else if (isAfterHours && !fromDate && !toDate) {
+        actualInterval = interval || '1m';
+        const previousTradingDay = getPreviousTradingDay();
+        from = new Date(previousTradingDay);
+        from.setHours(9, 15, 59, 0);
+        to = new Date(previousTradingDay);
+        to.setHours(23, 59, 59, 999);
+      } else if (!fromDate && !toDate) {
+        actualInterval = interval || '1m';
+        from = getTodayMarketOpen();
+        to = new Date();
+      } else {
+        actualInterval = interval || '1m';
+        from = fromDate || getTodayMarketOpen();
+        to = toDate || new Date();
+      }
+
+      const formatForApi = (date: Date) => {
+        const pad = (num: number) => num.toString().padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}%3A${pad(date.getMinutes())}%3A${pad(date.getSeconds())}%2B05%3A30`;
+      };
+
+      const fromStr = formatForApi(from);
+      const toStr = formatForApi(to);
+      const encodedSymbol = `EQ%3A${symbol.toUpperCase()}`;
+      const url = `${baseUrl}/v2/api/equity/priceticks?candleInterval=${actualInterval}&from=${fromStr}&to=${toStr}&securities=${encodedSymbol}`;
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+        mode: 'cors',
+        cache: 'no-cache',
+        // Add timeout
+        signal: AbortSignal.timeout(10000), // 10 second timeout
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`[fetchPriceTicksWithFallback] Success with ${baseUrl}`);
+        return data;
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`[fetchPriceTicksWithFallback] Failed with ${baseUrl}:`, error);
+      continue;
+    }
   }
+
+  console.error('[fetchPriceTicksWithFallback] All fallback URLs failed');
+  throw lastError || new Error('All API endpoints failed');
+};
+
+/**
+ * Test function to verify API URL construction
+ * This demonstrates weekday, after-hours, and weekend URL formats
+ */
+export const testApiUrlConstruction = (symbol: string = 'TATACOMM'): {
+  weekday: string;
+  afterHours: string;
+  weekend: string
+} => {
+  const formatForApi = (date: Date) => {
+    const pad = (num: number) => num.toString().padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}%3A${pad(date.getMinutes())}%3A${pad(date.getSeconds())}%2B05%3A30`;
+  };
+
+  const encodedSymbol = `EQ%3A${symbol.toUpperCase()}`;
+
+  // Normal Weekday URL (1m interval) - Market hours
+  const weekdayFrom = new Date('2025-06-11T09:15:59+05:30');
+  const weekdayTo = new Date('2025-06-11T15:30:00+05:30');
+  const weekdayFromStr = formatForApi(weekdayFrom);
+  const weekdayToStr = formatForApi(weekdayTo);
+  const weekdayUrl = `https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=1m&from=${weekdayFromStr}&to=${weekdayToStr}&securities=${encodedSymbol}`;
+
+  // After-Hours Weekday URL (1m interval) - Previous trading day data
+  // Example: It's Friday 13th at 2:00 AM, system date changed to Saturday 14th
+  // But we use Friday 13th data because markets haven't opened yet
+  const afterHoursFrom = new Date('2025-06-13T09:15:59+05:30'); // Previous trading day (Friday)
+  const afterHoursTo = new Date('2025-06-13T23:59:59+05:30');   // Previous trading day end
+  const afterHoursFromStr = formatForApi(afterHoursFrom);
+  const afterHoursToStr = formatForApi(afterHoursTo);
+  const afterHoursUrl = `https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=1m&from=${afterHoursFromStr}&to=${afterHoursToStr}&securities=${encodedSymbol}`;
+
+  // Weekend URL (1d interval) - Historical data
+  const weekendFrom = new Date('2023-11-29T09:15:59+05:30');
+  const weekendTo = new Date('2025-06-13T23:59:59+05:30');
+  const weekendFromStr = formatForApi(weekendFrom);
+  const weekendToStr = formatForApi(weekendTo);
+  const weekendUrl = `https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=1d&from=${weekendFromStr}&to=${weekendToStr}&securities=${encodedSymbol}`;
+
+  console.log('=== API URL Construction Test ===');
+  console.log('Normal Weekday (Market Hours):', weekdayUrl);
+  console.log('After-Hours Weekday (12AM-9:15AM):', afterHoursUrl);
+  console.log('Weekend (Historical Data):', weekendUrl);
+  console.log('Your weekend example:', 'https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=1d&from=2023-11-29T09%3A15%3A59%2B05%3A30&to=2025-06-13T23%3A59%3A59%2B05%3A30&securities=EQ%3ATATACOMM');
+  console.log('Weekend URL Match:', weekendUrl === 'https://api-v2.strike.money/v2/api/equity/priceticks?candleInterval=1d&from=2023-11-29T09%3A15%3A59%2B05%3A30&to=2025-06-13T23%3A59%3A59%2B05%3A30&securities=EQ%3ATATACOMM');
+
+  return {
+    weekday: weekdayUrl,
+    afterHours: afterHoursUrl,
+    weekend: weekendUrl
+  };
 };
