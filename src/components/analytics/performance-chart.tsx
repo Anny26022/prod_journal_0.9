@@ -41,9 +41,10 @@ export const PerformanceChart: React.FC<PerformanceChartProps> = (props) => {
   const { getPortfolioSize, getAllMonthlyTruePortfolios } = useTruePortfolioWithTrades(trades);
 
   // Memoize the monthly portfolios to prevent infinite re-renders
+  // Pass accounting method to ensure correct P/L attribution
   const monthlyPortfolios = React.useMemo(() => {
-    return getAllMonthlyTruePortfolios();
-  }, [getAllMonthlyTruePortfolios]);
+    return getAllMonthlyTruePortfolios(trades, useCashBasis);
+  }, [getAllMonthlyTruePortfolios, trades, useCashBasis]);
 
 
 

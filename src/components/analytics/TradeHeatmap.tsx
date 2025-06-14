@@ -24,6 +24,9 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
     const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
     const day = relevantDate.split("T")[0];
     const tradePL = calculateTradePL(trade, useCashBasis);
+
+
+
     acc[day] = (acc[day] || 0) + tradePL;
     return acc;
   }, {} as Record<string, number>);
@@ -33,6 +36,42 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
     date,
     count: data[date],
   }));
+
+  // Convert string dates to Date objects for CalendarHeatmap
+  // Handle invalid date formats and provide fallbacks
+  let startDateObj: Date;
+  let endDateObj: Date;
+
+  // Helper function to create a valid Date object
+  const createValidDate = (dateStr: string, fallback: string): Date => {
+    if (dateStr && dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const date = new Date(dateStr + 'T00:00:00.000Z');
+      if (!isNaN(date.getTime())) {
+        return date;
+      }
+    }
+    return new Date(fallback + 'T00:00:00.000Z');
+  };
+
+  // Get fallback dates from actual trade data
+  const tradeDatesArray = Object.keys(data).filter(date => date.match(/^\d{4}-\d{2}-\d{2}$/)).sort();
+  const earliestTradeDate = tradeDatesArray[0] || '2024-01-01';
+  const latestTradeDate = tradeDatesArray[tradeDatesArray.length - 1] || '2024-12-31';
+
+  // Create start date with validation
+  startDateObj = createValidDate(startDate, earliestTradeDate);
+
+  // Create end date with validation
+  endDateObj = createValidDate(endDate, latestTradeDate);
+
+  // Validate the final Date objects before using them
+  if (isNaN(startDateObj.getTime())) {
+    startDateObj = new Date('2024-01-01T00:00:00.000Z');
+  }
+
+  if (isNaN(endDateObj.getTime())) {
+    endDateObj = new Date('2024-12-31T23:59:59.999Z');
+  }
 
   // Custom transformDayElement to add hover effects and better styling
   const transformDayElement = (element: React.ReactElement, value: any) => {
@@ -126,8 +165,8 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
       `}</style>
       <div className="relative h-[230px] pt-4">
         <CalendarHeatmap
-          startDate={startDate}
-          endDate={endDate}
+          startDate={startDateObj}
+          endDate={endDateObj}
           values={values}
           classForValue={value => {
             if (!value) return "color-empty";

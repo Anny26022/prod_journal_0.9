@@ -109,6 +109,7 @@ export const TradeJournal = React.memo(function TradeJournal({
 }: TradeJournalProps) {
   const {
     trades,
+    originalTrades,
     addTrade,
     updateTrade,
     deleteTrade,
@@ -135,23 +136,9 @@ export const TradeJournal = React.memo(function TradeJournal({
   // State for inline editing
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
-  // Memoize filtered and sorted trades
-  const processedTrades = useMemo(() => {
-    return trades
-      .filter(trade => {
-        if (!searchQuery) return true;
-        const searchLower = searchQuery.toLowerCase();
-        return (
-          (trade.name || '').toLowerCase().includes(searchLower) ||
-          (trade.setup || '').toLowerCase().includes(searchLower) ||
-          (trade.notes || '').toLowerCase().includes(searchLower)
-        );
-      })
-      .filter(trade => {
-        if (!statusFilter || statusFilter === "all") return true;
-        return trade.positionStatus.toLowerCase() === statusFilter.toLowerCase();
-      });
-  }, [trades, searchQuery, statusFilter]);
+  // The trades from useTrades hook already include proper filtering, sorting, and cash basis expansion
+  // No need for additional processing here
+  const processedTrades = trades;
 
   // Memoize trade statistics calculations - now responsive to actual trade data changes
   const tradeStats = useMemo(() => {
@@ -202,7 +189,9 @@ export const TradeJournal = React.memo(function TradeJournal({
 
   const handleExport = (format: 'csv' | 'xlsx') => {
     // Use the raw, unfiltered trades from the hook for export
-    const allTradesForExport = trades; 
+    const allTradesForExport = trades;
+
+    console.log(`📊 Exporting ${allTradesForExport.length} trades using ${useCashBasis ? 'Cash Basis' : 'Accrual Basis'} accounting method`);
 
     // Define the headers for the export, ensuring they match the allColumns definitions
     const exportHeaders = allColumns
@@ -211,11 +200,30 @@ export const TradeJournal = React.memo(function TradeJournal({
 
     const dataToExport = allTradesForExport.map(trade => {
       const row: { [key: string]: any } = {};
+
+      // Get accounting-aware values for P/L related fields
+      const accountingValues = getAccountingAwareValues(trade);
+
       exportHeaders.forEach(header => {
-        row[header.label] = trade[header.key as keyof Trade];
+        let value = trade[header.key as keyof Trade];
+
+        // Use accounting-aware values for P/L fields
+        if (header.key === 'plRs') {
+          value = accountingValues.plRs;
+        } else if (header.key === 'realisedAmount') {
+          value = accountingValues.realisedAmount;
+        } else if (header.key === 'pfImpact') {
+          value = accountingValues.pfImpact;
+        }
+
+        row[header.label] = value;
       });
       return row;
     });
+
+    // Add accounting method to filename for clarity
+    const accountingMethodSuffix = useCashBasis ? '_cash_basis' : '_accrual_basis';
+    const dateStr = new Date().toISOString().split('T')[0];
 
     if (format === 'csv') {
       const csv = Papa.unparse(dataToExport);
@@ -223,7 +231,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       const link = document.createElement("a");
       const url = URL.createObjectURL(blob);
       link.setAttribute("href", url);
-      link.setAttribute("download", `trade_journal_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute("download", `trade_journal_${dateStr}${accountingMethodSuffix}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
@@ -232,7 +240,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       const worksheet = XLSX.utils.json_to_sheet(dataToExport);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Trades");
-      XLSX.writeFile(workbook, `trade_journal_${new Date().toISOString().split('T')[0]}.xlsx`);
+      XLSX.writeFile(workbook, `trade_journal_${dateStr}${accountingMethodSuffix}.xlsx`);
     }
   };
   
@@ -347,7 +355,7 @@ export const TradeJournal = React.memo(function TradeJournal({
   // Progressive loading for large datasets
   const [loadedTradesCount, setLoadedTradesCount] = React.useState(() => {
     // Initial load: show more for smaller datasets, less for larger ones
-    const initialLoad = processedTrades.length < 100 ? processedTrades.length : Math.min(100, processedTrades.length);
+    const initialLoad = trades.length < 100 ? trades.length : Math.min(100, trades.length);
     return initialLoad;
   });
 
@@ -355,35 +363,35 @@ export const TradeJournal = React.memo(function TradeJournal({
 
   // Update loaded count when trades change
   React.useEffect(() => {
-    if (processedTrades.length <= loadedTradesCount) {
-      setLoadedTradesCount(processedTrades.length);
+    if (trades.length <= loadedTradesCount) {
+      setLoadedTradesCount(trades.length);
     }
-  }, [processedTrades.length, loadedTradesCount]);
+  }, [trades.length, loadedTradesCount]);
 
   const loadMoreTrades = useCallback(() => {
     setIsLoadingMore(true);
     // Simulate loading delay for better UX
     setTimeout(() => {
-      setLoadedTradesCount(prev => Math.min(prev + 50, processedTrades.length));
+      setLoadedTradesCount(prev => Math.min(prev + 50, trades.length));
       setIsLoadingMore(false);
     }, 300);
-  }, [processedTrades.length]);
+  }, [trades.length]);
 
   // Use progressive loading for large datasets, pagination for smaller ones
-  const shouldUseProgressiveLoading = processedTrades.length > 200;
+  const shouldUseProgressiveLoading = trades.length > 500;
 
-  const pages = shouldUseProgressiveLoading ? 1 : Math.ceil(processedTrades.length / rowsPerPage);
+  const pages = shouldUseProgressiveLoading ? 1 : Math.ceil(trades.length / rowsPerPage);
 
   // Optimized pagination with better memoization
   const items = React.useMemo(() => {
     if (shouldUseProgressiveLoading) {
-      return processedTrades.slice(0, loadedTradesCount);
+      return trades.slice(0, loadedTradesCount);
     } else {
       const start = (page - 1) * rowsPerPage;
       const end = start + rowsPerPage;
-      return processedTrades.slice(start, end);
+      return trades.slice(start, end);
     }
-  }, [page, processedTrades, rowsPerPage, shouldUseProgressiveLoading, loadedTradesCount]);
+  }, [page, trades, rowsPerPage, shouldUseProgressiveLoading, loadedTradesCount]);
 
   // Optimized page change handler with immediate UI update
   const handlePageChange = React.useCallback((newPage: number) => {
@@ -1239,7 +1247,7 @@ export const TradeJournal = React.memo(function TradeJournal({
 
   // Stats calculation that responds to trade data changes
   const stableStatsCalculation = React.useMemo(() => {
-    if (trades.length === 0) {
+    if (originalTrades.length === 0) {
       return {
         totalUnrealizedPL: 0,
         openPfImpact: 0,
@@ -1250,28 +1258,150 @@ export const TradeJournal = React.memo(function TradeJournal({
       };
     }
 
-    // Calculate unrealized P/L for open positions
-    const unrealizedPL = trades
-      .filter(trade => trade.positionStatus === 'Open' || trade.positionStatus === 'Partial')
-      .reduce((sum, trade) => sum + calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell), 0);
+    // Use trades for stats calculation (they are already properly filtered and expanded by useTrades hook)
+    const tradesForStats = trades;
+
+    // Debug: Check dataset consistency (ALWAYS LOG)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`📊 [Dataset Check] useCashBasis=${useCashBasis}, originalTrades: ${originalTrades.length}, trades: ${trades.length}, tradesForStats: ${tradesForStats.length}`);
+    }
+
+    // Calculate unrealized P/L for open positions using filtered trades to respond to search
+    // For cash basis, we need to be careful not to double count, so we'll use a Set to track original trade IDs
+    let unrealizedPL = 0;
+    if (useCashBasis) {
+      // For cash basis, only count each original trade once for unrealized P/L
+      const processedTradeIds = new Set();
+      tradesForStats
+        .filter(trade => trade.positionStatus === 'Open' || trade.positionStatus === 'Partial')
+        .forEach(trade => {
+          const originalId = trade.id.split('_exit_')[0]; // Get original trade ID
+          if (!processedTradeIds.has(originalId)) {
+            processedTradeIds.add(originalId);
+            unrealizedPL += calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
+          }
+        });
+    } else {
+      // For accrual basis, straightforward calculation
+      unrealizedPL = tradesForStats
+        .filter(trade => trade.positionStatus === 'Open' || trade.positionStatus === 'Partial')
+        .reduce((sum, trade) => sum + calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell), 0);
+    }
 
     const openImpact = portfolioSize > 0 ? (unrealizedPL / portfolioSize) * 100 : 0;
 
-    // Calculate realized P/L based on accounting method
-    const realizedPL = trades
-      .filter(trade => trade.positionStatus !== 'Open')
-      .reduce((sum, trade) => sum + calculateTradePL(trade, useCashBasis), 0);
+    // Calculate realized P/L based on accounting method using processed trades
+    const realizedTrades = tradesForStats.filter(trade => {
+      if (useCashBasis) {
+        // For cash basis: include expanded trades OR original closed/partial trades
+        return trade._cashBasisExit || trade.positionStatus !== 'Open';
+      }
+      // For accrual basis: include all non-open trades
+      return trade.positionStatus !== 'Open';
+    });
+
+    // Debug: Compare filtering results
+    if (process.env.NODE_ENV === 'development' && useCashBasis) {
+      const debugCashTrades = processedTrades.filter(trade => {
+        return trade._cashBasisExit || trade.positionStatus !== 'Open';
+      });
+      console.log(`🔍 [Filter Check] Stats realizedTrades: ${realizedTrades.length}, Debug cashTrades: ${debugCashTrades.length}`);
+
+      if (realizedTrades.length !== debugCashTrades.length) {
+        console.log(`⚠️ [Filter Mismatch] Different filtering results!`);
+      }
+    }
+
+    let debugSum = 0;
+    const realizedPL = realizedTrades.reduce((sum, trade, index) => {
+      const tradePL = calculateTradePL(trade, useCashBasis);
+      debugSum += tradePL;
+
+      // Debug: Track every addition for cash basis
+      if (process.env.NODE_ENV === 'development' && useCashBasis && Math.abs(tradePL) > 100) {
+        console.log(`💰 [Sum Debug ${index}] ${trade.name}: +₹${tradePL.toFixed(2)} → Total: ₹${(sum + tradePL).toFixed(2)}`);
+      }
+
+      return sum + tradePL;
+    }, 0);
+
+    // Debug: Compare final sums and do a manual calculation (ALWAYS LOG)
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`💰 [Final Sum] useCashBasis=${useCashBasis}, realizedPL=₹${realizedPL.toFixed(2)}, debugSum=₹${debugSum.toFixed(2)}, trades=${realizedTrades.length}`);
+
+      if (useCashBasis) {
+        // Manual calculation to verify
+        const manualSum = realizedTrades.reduce((sum, trade) => {
+          const pl = calculateTradePL(trade, true);
+          return sum + pl;
+        }, 0);
+
+        console.log(`💰 [Manual Check] manualSum=₹${manualSum.toFixed(2)}`);
+
+        if (Math.abs(realizedPL - manualSum) > 0.01) {
+          console.log(`⚠️ [Sum Mismatch] realizedPL ≠ manualSum! Difference: ₹${(realizedPL - manualSum).toFixed(2)}`);
+        }
+      }
+    }
+
+    // Debug logging for both accounting methods
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`💰 [${useCashBasis ? 'Cash' : 'Accrual'} Basis] Realized trades: ${realizedTrades.length}, Total P/L: ₹${realizedPL.toFixed(2)}`);
+
+      if (useCashBasis) {
+        // Compare with accrual calculation
+        const accrualTrades = tradesForStats.filter(trade => trade.positionStatus !== 'Open');
+        const accrualPL = accrualTrades.reduce((sum, trade) => sum + calculateTradePL(trade, false), 0);
+        console.log(`💰 [Comparison] Accrual would be: ${accrualTrades.length} trades, ₹${accrualPL.toFixed(2)}`);
+
+        // Check for duplicates in cash basis
+        const expandedTrades = realizedTrades.filter(t => t._cashBasisExit);
+        const originalTrades = realizedTrades.filter(t => !t._cashBasisExit);
+        console.log(`💰 [Cash Breakdown] Expanded: ${expandedTrades.length}, Original: ${originalTrades.length}`);
+
+        // Check for potential double counting
+        const originalTradeIds = new Set(originalTrades.map(t => t.id.split('_exit_')[0]));
+        const expandedTradeIds = new Set(expandedTrades.map(t => t.id.split('_exit_')[0]));
+        const overlap = [...originalTradeIds].filter(id => expandedTradeIds.has(id));
+        if (overlap.length > 0) {
+          console.log(`⚠️ [Double Counting] ${overlap.length} trades appear in both expanded and original:`, overlap);
+        }
+      }
+    }
 
     const realizedImpact = portfolioSize > 0 ? (realizedPL / portfolioSize) * 100 : 0;
 
-    // Calculate open heat
-    const openHeat = calcOpenHeat(trades, portfolioSize, getPortfolioSize);
+    // Calculate open heat using filtered trades to respond to search
+    // For cash basis, avoid double counting by using original trade IDs
+    let filteredTradesForOpenHeat = tradesForStats;
+    if (useCashBasis) {
+      // For cash basis, only include each original trade once
+      const seenTradeIds = new Set();
+      filteredTradesForOpenHeat = tradesForStats.filter(trade => {
+        const originalId = trade.id.split('_exit_')[0];
+        if (seenTradeIds.has(originalId)) {
+          return false;
+        }
+        seenTradeIds.add(originalId);
+        return true;
+      });
+    }
+    const openHeat = calcOpenHeat(filteredTradesForOpenHeat, portfolioSize, getPortfolioSize);
 
-    // Calculate win rate
-    const tradesWithAccountingPL = trades.map(trade => ({
-      ...trade,
-      accountingPL: calculateTradePL(trade, useCashBasis)
-    }));
+    // Calculate win rate using processed trades for cash basis
+    const tradesWithAccountingPL = tradesForStats
+      .filter(trade => {
+        if (useCashBasis) {
+          // For cash basis: include expanded trades OR original closed/partial trades
+          return trade._cashBasisExit || trade.positionStatus !== 'Open';
+        }
+        // For accrual basis: count all non-open trades
+        return trade.positionStatus !== 'Open';
+      })
+      .map(trade => ({
+        ...trade,
+        accountingPL: calculateTradePL(trade, useCashBasis)
+      }));
     const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0);
     const winRate = tradesWithAccountingPL.length > 0 ? (winningTrades.length / tradesWithAccountingPL.length) * 100 : 0;
 
@@ -1283,7 +1413,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       openHeat,
       winRate
     };
-  }, [trades, portfolioSize, useCashBasis, getPortfolioSize]); // Now responds to all trade data changes
+  }, [trades, originalTrades, portfolioSize, useCashBasis, getPortfolioSize]); // Now responds to all trade data changes
 
   // Update lazy stats when stable calculation changes
   React.useEffect(() => {
@@ -1294,11 +1424,23 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
-  // Memoize open trades to prevent unnecessary price fetching
-  const openTrades = React.useMemo(() =>
-    trades.filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial'),
-    [trades]
-  );
+  // Memoize open trades to prevent unnecessary price fetching (use filtered trades to respond to search)
+  const openTrades = React.useMemo(() => {
+    let filteredOpenTrades = trades.filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial');
+
+    // For cash basis, avoid double counting by using original trade IDs
+    if (useCashBasis) {
+      const seenTradeIds = new Set();
+      filteredOpenTrades = filteredOpenTrades.filter(t => {
+        const originalId = t.id.split('_exit_')[0];
+        if (seenTradeIds.has(originalId)) return false;
+        seenTradeIds.add(originalId);
+        return true;
+      });
+    }
+
+    return filteredOpenTrades;
+  }, [trades, useCashBasis]);
 
   // Memoize the price fetching function to prevent re-creation
   const fetchPricesForOpenTrades = React.useCallback(async () => {
@@ -1417,10 +1559,12 @@ export const TradeJournal = React.memo(function TradeJournal({
                 </Button>
               )}
 
+
+
               <Dropdown>
                 <DropdownTrigger>
-                  <Button 
-                    variant="flat" 
+                  <Button
+                    variant="flat"
                     size="sm"
                     className="bg-default-100 dark:bg-gray-900 text-foreground dark:text-white min-w-[120px] h-9"
                     endContent={<Icon icon="lucide:chevron-down" className="text-sm dark:text-gray-400" />}
@@ -1428,9 +1572,9 @@ export const TradeJournal = React.memo(function TradeJournal({
                     Columns
                   </Button>
                 </DropdownTrigger>
-                <DropdownMenu 
+                <DropdownMenu
                   aria-label="Columns selection"
-                  className="dark:bg-gray-900 max-h-60 overflow-y-auto" // <-- add scroller
+                  className="dark:bg-gray-900 max-h-60 overflow-y-auto"
                   closeOnSelect={false}
                   selectionMode="multiple"
                   selectedKeys={new Set(visibleColumns)}
@@ -1439,6 +1583,32 @@ export const TradeJournal = React.memo(function TradeJournal({
                     base: "dark:bg-gray-900",
                   }}
                 >
+                  {/* Select All / Deselect All Controls */}
+                  <DropdownItem
+                    key="select-all"
+                    className="dark:text-white dark:hover:bg-gray-800"
+                    startContent={<Icon icon="lucide:check-square" className="text-sm" />}
+                    onPress={() => {
+                      const allColumnKeys = allColumns.filter(col => col.key !== "actions").map(col => col.key);
+                      setVisibleColumns(allColumnKeys);
+                    }}
+                  >
+                    Select All
+                  </DropdownItem>
+                  <DropdownItem
+                    key="deselect-all"
+                    className="dark:text-white dark:hover:bg-gray-800 border-b border-divider mb-1 pb-2"
+                    startContent={<Icon icon="lucide:square" className="text-sm" />}
+                    onPress={() => {
+                      // Keep essential columns visible
+                      const essentialColumns = ["tradeNo", "date", "name", "buySell", "positionStatus"];
+                      setVisibleColumns(essentialColumns);
+                    }}
+                  >
+                    Deselect All
+                  </DropdownItem>
+
+                  {/* Column Selection Items */}
                   {allColumns.filter(col => col.key !== "actions").map((column) => (
                     <DropdownItem key={column.key} className="capitalize dark:text-white dark:hover:bg-gray-800">
                       {column.label}
@@ -1507,19 +1677,33 @@ export const TradeJournal = React.memo(function TradeJournal({
           value: trades.length.toString(),
           icon: "lucide:list",
           color: "primary",
-          tooltip: "Total number of trades you have recorded."
+          tooltip: `Total number of trades ${useCashBasis ? '(expanded for individual exits)' : 'you have recorded'} matching current search/filter.`
         }, {
           title: statsTitle.openPositions,
-          value: trades.filter(t => t.positionStatus === "Open").length.toString(),
+          value: (() => {
+            // Count open positions from filtered trades, avoiding double counting for cash basis
+            if (useCashBasis) {
+              const seenTradeIds = new Set();
+              return trades.filter(t => {
+                if (t.positionStatus !== "Open") return false;
+                const originalId = t.id.split('_exit_')[0];
+                if (seenTradeIds.has(originalId)) return false;
+                seenTradeIds.add(originalId);
+                return true;
+              }).length.toString();
+            } else {
+              return trades.filter(t => t.positionStatus === "Open").length.toString();
+            }
+          })(),
           icon: "lucide:activity",
           color: "warning",
-          tooltip: "Number of trades that are currently open."
+          tooltip: "Number of trades that are currently open (filtered by search)."
         }, {
           title: statsTitle.winRate,
           value: `${lazyStats.winRate.toFixed(2)}%`,
           icon: "lucide:target",
           color: "success",
-          tooltip: `Percentage of trades that are profitable (${useCashBasis ? 'Cash Basis' : 'Accrual Basis'}).`
+          tooltip: `Percentage of trades that are profitable (${useCashBasis ? 'Cash Basis' : 'Accrual Basis'}) matching current search/filter.`
         }].map((stat, idx) => (
           <div key={stat.title} className="flex items-center gap-2">
             <StatsCard
@@ -1553,14 +1737,30 @@ export const TradeJournal = React.memo(function TradeJournal({
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
 
-              const closedTrades = trades.filter(t => t.positionStatus === 'Closed' || t.positionStatus === 'Partial');
+              // Use filtered trades for tooltip breakdown to respond to search
+              let closedTrades = trades.filter(t => t.positionStatus === 'Closed' || t.positionStatus === 'Partial');
+
+              // For cash basis, avoid double counting in tooltip
+              if (useCashBasis) {
+                const seenTradeIds = new Set();
+                closedTrades = closedTrades.filter(t => {
+                  const originalId = t.id.split('_exit_')[0];
+                  if (seenTradeIds.has(originalId)) return false;
+                  seenTradeIds.add(originalId);
+                  return true;
+                });
+              }
               const breakdown = closedTrades
                 .map(t => {
                   const realizedPL = calculateTradePL(t, useCashBasis);
+                  // Use accounting-method-aware PF Impact from cached values
+                  const pfImpact = useCashBasis
+                    ? (t._cashPfImpact ?? 0)
+                    : (t._accrualPfImpact ?? t.pfImpact ?? 0);
                   return {
                     name: t.name || 'N/A',
                     realizedPL: realizedPL,
-                    pfImpact: portfolioSize > 0 ? (realizedPL / portfolioSize) * 100 : 0
+                    pfImpact: pfImpact
                   };
                 })
                 .filter(t => Math.abs(t.realizedPL) > 0.01) // Filter out negligible amounts
@@ -1575,15 +1775,7 @@ export const TradeJournal = React.memo(function TradeJournal({
                     <div className="text-foreground-400 text-xs">
                       This is the % of your portfolio that is realized as profit/loss.
                     </div>
-                    <div className="text-warning-600 mt-1 text-xs">
-                      <strong>Accounting Method:</strong> {useCashBasis ? 'Cash Basis' : 'Accrual Basis'}
-                    </div>
-                    <div className="text-xs text-foreground-400">
-                      {useCashBasis
-                        ? "P/L attributed to exit dates"
-                        : "P/L attributed to entry dates"
-                      }
-                    </div>
+
                   </div>
 
                   {breakdown.length > 0 ? (
@@ -1641,13 +1833,27 @@ export const TradeJournal = React.memo(function TradeJournal({
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
 
-              const openTrades = trades.filter(t => (t.positionStatus === 'Open' || t.positionStatus === 'Partial'));
+              // Use filtered trades for unrealized P/L tooltip to respond to search
+              let openTrades = trades.filter(t => (t.positionStatus === 'Open' || t.positionStatus === 'Partial'));
+
+              // For cash basis, avoid double counting in tooltip
+              if (useCashBasis) {
+                const seenTradeIds = new Set();
+                openTrades = openTrades.filter(t => {
+                  const originalId = t.id.split('_exit_')[0];
+                  if (seenTradeIds.has(originalId)) return false;
+                  seenTradeIds.add(originalId);
+                  return true;
+                });
+              }
               const breakdown = openTrades
                 .map(t => {
                   const unrealizedPL = calcUnrealizedPL(t.avgEntry, t.cmp, t.openQty, t.buySell);
+                  const pfImpact = portfolioSize > 0 ? (unrealizedPL / portfolioSize) * 100 : 0;
                   return {
                     name: t.name || 'N/A',
-                    unrealizedPL: unrealizedPL
+                    unrealizedPL: unrealizedPL,
+                    pfImpact: pfImpact
                   };
                 })
                 .filter(t => Math.abs(t.unrealizedPL) > 0.01) // Filter out negligible amounts
@@ -1659,11 +1865,16 @@ export const TradeJournal = React.memo(function TradeJournal({
                   {breakdown.length > 0 ? (
                     <ul className="space-y-1">
                       {breakdown.map((t, idx) => (
-                        <li key={`${t.name}-unrealized-${idx}`} className="flex justify-between">
-                          <span>{t.name}</span>
-                          <span className={`font-mono ${t.unrealizedPL >= 0 ? 'text-success' : 'text-danger'}`}>
-                            {formatCurrency(t.unrealizedPL)}
-                          </span>
+                        <li key={`${t.name}-unrealized-${idx}`} className="flex justify-between items-center">
+                          <span className="truncate max-w-[100px]" title={t.name}>{t.name}</span>
+                          <div className="flex flex-col items-end ml-2">
+                            <span className={`font-mono font-medium ${t.unrealizedPL >= 0 ? 'text-success' : 'text-danger'}`}>
+                              {formatCurrency(t.unrealizedPL)}
+                            </span>
+                            <span className={`font-mono text-xs ${t.pfImpact >= 0 ? 'text-success' : 'text-danger'}`}>
+                              ({t.pfImpact >= 0 ? '+' : ''}{t.pfImpact.toFixed(2)}%)
+                            </span>
+                          </div>
                         </li>
                       ))}
                     </ul>
@@ -1688,7 +1899,19 @@ export const TradeJournal = React.memo(function TradeJournal({
             placement="top"
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
-              const openTrades = trades.filter(t => (t.positionStatus === 'Open' || t.positionStatus === 'Partial'));
+              // Use filtered trades for open heat tooltip to respond to search
+              let openTrades = trades.filter(t => (t.positionStatus === 'Open' || t.positionStatus === 'Partial'));
+
+              // For cash basis, avoid double counting in tooltip
+              if (useCashBasis) {
+                const seenTradeIds = new Set();
+                openTrades = openTrades.filter(t => {
+                  const originalId = t.id.split('_exit_')[0];
+                  if (seenTradeIds.has(originalId)) return false;
+                  seenTradeIds.add(originalId);
+                  return true;
+                });
+              }
               const breakdown = openTrades
                 .map(t => ({
                   name: t.name || 'N/A',
@@ -1743,8 +1966,8 @@ export const TradeJournal = React.memo(function TradeJournal({
 
       <Card className="border border-divider">
         <CardBody className="p-0">
-          {/* Show empty state outside the scrollable table when no items */}
-          {!isLoading && items.length === 0 ? (
+          {/* Show empty state only when we're sure there are no trades and not loading */}
+          {!isLoading && !isRecalculating && items.length === 0 && trades.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 px-4 text-center min-h-[400px]">
               <div className="text-default-400 mb-2">
                 <Icon
@@ -1753,15 +1976,15 @@ export const TradeJournal = React.memo(function TradeJournal({
                 />
               </div>
               <div className="text-default-500 text-xl font-medium mb-2">
-                {trades.length === 0 ? "No trades found" : "No matching trades"}
+                {originalTrades.length === 0 ? "No trades found" : "No matching trades"}
               </div>
               <div className="text-default-400 text-base mb-6">
-                {trades.length === 0
+                {originalTrades.length === 0
                   ? "Add your first trade to get started"
                   : "Try adjusting your search or filter criteria"
                 }
               </div>
-              {trades.length === 0 && (
+              {originalTrades.length === 0 && (
                 <Button
                   color="primary"
                   variant="shadow"
@@ -1793,7 +2016,7 @@ export const TradeJournal = React.memo(function TradeJournal({
               shouldUseProgressiveLoading ? (
                 // Progressive loading controls for large datasets
                 <div className="flex w-full justify-center items-center gap-4 py-4">
-                  {loadedTradesCount < processedTrades.length ? (
+                  {loadedTradesCount < trades.length ? (
                     <Button
                       color="primary"
                       variant="flat"
@@ -1803,11 +2026,11 @@ export const TradeJournal = React.memo(function TradeJournal({
                       startContent={!isLoadingMore && <Icon icon="lucide:chevron-down" />}
                       className="min-w-[120px]"
                     >
-                      {isLoadingMore ? 'Loading...' : `Load More (${processedTrades.length - loadedTradesCount} remaining)`}
+                      {isLoadingMore ? 'Loading...' : `Load More (${trades.length - loadedTradesCount} remaining)`}
                     </Button>
                   ) : (
                     <div className="text-sm text-default-500">
-                      All {processedTrades.length} trades loaded
+                      All {trades.length} trades loaded
                     </div>
                   )}
                 </div>
@@ -1869,7 +2092,7 @@ export const TradeJournal = React.memo(function TradeJournal({
 
                   {/* Trade count info */}
                   <div className="text-sm text-default-500">
-                    {`${((page - 1) * rowsPerPage) + 1}-${Math.min(page * rowsPerPage, processedTrades.length)} of ${processedTrades.length}`}
+                    {`${((page - 1) * rowsPerPage) + 1}-${Math.min(page * rowsPerPage, trades.length)} of ${trades.length}`}
                   </div>
                 </div>
               ) : null

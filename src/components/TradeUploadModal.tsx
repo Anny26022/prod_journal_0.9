@@ -228,6 +228,9 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     const exitLotsForFifo = allExits.map(e => ({ price: e.price, qty: e.qty }));
     const plRs = exitedQty > 0 ? calcRealizedPL_FIFO(entryLotsForFifo, exitLotsForFifo, trade.buySell as 'Buy' | 'Sell') : 0;
 
+    // Note: PF Impact calculation in upload modal uses entry date portfolio size
+    // This is acceptable for initial calculation as accounting method-specific
+    // recalculation will happen in the main trade processing pipeline
     const pfImpact = calcPFImpact(plRs, tradePortfolioSize);
 
     return {

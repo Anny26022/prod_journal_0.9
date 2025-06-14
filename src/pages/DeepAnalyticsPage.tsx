@@ -171,7 +171,13 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
             const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0).length;
             const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
-            const totalPfImpact = setupTrades.reduce((sum, trade) => sum + trade.pfImpact, 0);
+            // Use accounting-method-aware PF Impact
+            const totalPfImpact = setupTrades.reduce((sum, trade) => {
+                const pfImpact = useCashBasis
+                    ? (trade._cashPfImpact ?? 0)
+                    : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+                return sum + pfImpact;
+            }, 0);
 
         return {
                 id: setupName,
@@ -236,9 +242,19 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
         const uniqueTradingDays = new Set(closedTrades.map(trade => trade.date.split('T')[0])).size;
         const avgPnLPerDay = uniqueTradingDays > 0 ? totalPnL / uniqueTradingDays : 0;
 
-        // Calculate total positive and negative PF Impact
-        const totalPositivePfImpact = winningTrades.reduce((sum, trade) => sum + trade.pfImpact, 0);
-        const totalAbsoluteNegativePfImpact = losingTrades.reduce((sum, trade) => sum + Math.abs(trade.pfImpact), 0);
+        // Calculate total positive and negative PF Impact using accounting-method-aware values
+        const totalPositivePfImpact = winningTrades.reduce((sum, trade) => {
+            const pfImpact = useCashBasis
+                ? (trade._cashPfImpact ?? 0)
+                : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+            return sum + pfImpact;
+        }, 0);
+        const totalAbsoluteNegativePfImpact = losingTrades.reduce((sum, trade) => {
+            const pfImpact = useCashBasis
+                ? (trade._cashPfImpact ?? 0)
+                : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+            return sum + Math.abs(pfImpact);
+        }, 0);
 
         // Calculate average PF Impact for winning and losing trades
         const avgWinPfImpact = totalWinningTrades > 0 ? totalPositivePfImpact / totalWinningTrades : 0;
@@ -517,10 +533,55 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
     const { startDate: globalStartDate, endDate: globalEndDate } = getDateRangeFromFilter(filter);
 
+
+
     // Filter trades by date range using accounting method-aware dates
     const filteredTrades = React.useMemo(() => {
-        if (!globalStartDate && !globalEndDate) return trades;
-        return trades.filter(trade => {
+        let processedTrades = trades;
+
+        // For cash basis, expand trades to include individual exits
+        if (useCashBasis) {
+            const expandedTrades: any[] = [];
+
+            console.log(`🔄 [DeepAnalytics] Cash basis mode: expanding ${trades.length} trades for heatmap`);
+
+            trades.forEach(trade => {
+                if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+                    const exits = getExitDatesWithFallback(trade);
+
+                    if (exits.length > 0) {
+                        // Create a trade entry for each exit
+                        exits.forEach(exit => {
+                            const expandedTrade = {
+                                ...trade,
+                                _cashBasisExit: {
+                                    date: exit.date,
+                                    qty: exit.qty,
+                                    price: exit.price
+                                }
+                            };
+                            expandedTrades.push(expandedTrade);
+                        });
+                        console.log(`📊 [DeepAnalytics] Expanded ${trade.name} into ${exits.length} exit entries`);
+                    } else {
+                        // Fallback: if no individual exit data, use the original trade
+                        expandedTrades.push(trade);
+                        console.log(`⚠️ [DeepAnalytics] No exit data for ${trade.name}, using original trade`);
+                    }
+                } else {
+                    // For open positions, include as-is
+                    expandedTrades.push(trade);
+                }
+            });
+
+            console.log(`✅ [DeepAnalytics] Cash basis expansion complete: ${trades.length} → ${expandedTrades.length} trades`);
+            processedTrades = expandedTrades;
+        }
+
+        // Apply date filtering
+        if (!globalStartDate && !globalEndDate) return processedTrades;
+
+        return processedTrades.filter(trade => {
             const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
             const tradeDate = new Date(relevantDate.split('T')[0]);
             if (globalStartDate && tradeDate < globalStartDate) return false;
@@ -531,8 +592,34 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
 
     // Calculate min and max trade dates for heatmap (within filtered trades) using accounting method-aware dates
     const tradeDates = filteredTrades.map(t => getTradeDateForAccounting(t, useCashBasis).split('T')[0]);
-    const heatmapStartDate = globalStartDate ? globalStartDate.toISOString().split('T')[0] : (tradeDates.length > 0 ? tradeDates.reduce((a, b) => a < b ? a : b) : '');
-    const heatmapEndDate = globalEndDate ? globalEndDate.toISOString().split('T')[0] : (tradeDates.length > 0 ? tradeDates.reduce((a, b) => a > b ? a : b) : '');
+    const minTradeDate = tradeDates.length > 0 ? tradeDates.reduce((a, b) => a < b ? a : b) : '';
+    const maxTradeDate = tradeDates.length > 0 ? tradeDates.reduce((a, b) => a > b ? a : b) : '';
+
+
+
+    // Ensure proper date format handling
+    let heatmapStartDate = '';
+    let heatmapEndDate = '';
+
+    // Handle start date with validation
+    if (globalStartDate && globalStartDate instanceof Date && !isNaN(globalStartDate.getTime())) {
+        heatmapStartDate = globalStartDate.toISOString().split('T')[0];
+    } else if (minTradeDate && typeof minTradeDate === 'string' && minTradeDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        heatmapStartDate = minTradeDate;
+    } else {
+        heatmapStartDate = '2024-07-01'; // fallback
+    }
+
+    // Handle end date with validation
+    if (globalEndDate && globalEndDate instanceof Date && !isNaN(globalEndDate.getTime())) {
+        heatmapEndDate = globalEndDate.toISOString().split('T')[0];
+    } else if (maxTradeDate && typeof maxTradeDate === 'string' && maxTradeDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        heatmapEndDate = maxTradeDate;
+    } else {
+        heatmapEndDate = '2025-01-31'; // fallback
+    }
+
+
 
     // Helper function to format percentages
     const formatPercentage = (value: number) => {
@@ -901,9 +988,9 @@ Values: (${(analytics.annualizedAverageReturn * 100).toFixed(1)}% - ${(analytics
                                     No trades taken in this period.
                                 </div>
                             ) : (
-                                <TradeHeatmap 
-                                    trades={filteredTrades} 
-                                    startDate={heatmapStartDate} 
+                                <TradeHeatmap
+                                    trades={filteredTrades}
+                                    startDate={heatmapStartDate}
                                     endDate={heatmapEndDate}
                                     className="min-w-[750px]"
                                 />

@@ -203,6 +203,9 @@ import * as Papa from "papaparse"; // Centralized import
       { price: Number(trade.exit3Price || 0), qty: exit3Qty }
     ].filter(e => e.qty > 0 && e.price > 0);
     const plRs = exitedQty > 0 ? calcRealizedPL_FIFO(entryLots, exitLots, trade.buySell as 'Buy' | 'Sell') : 0;
+    // Note: PF Impact calculation in trade modal uses entry date portfolio size
+    // This is acceptable for preview as accounting method-specific recalculation
+    // will happen when the trade is saved to the main trade processing pipeline
     const pfImpact = tradePortfolioSize > 0 ? calcPFImpact(plRs, tradePortfolioSize) : 0;
     
     return {

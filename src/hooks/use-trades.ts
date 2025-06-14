@@ -255,7 +255,7 @@ function recalculateAllTrades(
     const totalInitialQty = allEntries.reduce((sum, e) => sum + e.qty, 0);
     const positionSize = calcPositionSize(avgEntry, totalInitialQty);
 
-    // Get the true portfolio size for the trade's month/year
+    // Get the true portfolio size for the trade's entry date (for allocation calculation)
     let tradePortfolioSize = 100000; // Default fallback
     if (trade.date && getTruePortfolioSize) { // Use the passed getTruePortfolioSize
       const tradeDate = new Date(trade.date);
@@ -337,9 +337,21 @@ function recalculateAllTrades(
 
     const plRs = exitedQty > 0 ? calcRealizedPL_FIFO(entryLotsForFifo, exitLotsForFifo, trade.buySell as 'Buy' | 'Sell') : 0;
 
-    // Calculate accounting-aware P/L for pfImpact
+    // Calculate accounting-aware P/L and PF Impact using correct portfolio size
     const accountingAwarePL = calculateTradePL({...trade, plRs}, useCashBasis);
-    const pfImpact = calcPFImpact(accountingAwarePL, tradePortfolioSize);
+    const accountingAwarePortfolioSize = getTruePortfolioSize ?
+      (() => {
+        try {
+          const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
+          const date = new Date(relevantDate);
+          const month = date.toLocaleString('default', { month: 'short' });
+          const year = date.getFullYear();
+          return getTruePortfolioSize(month, year) || 100000;
+        } catch {
+          return 100000;
+        }
+      })() : 100000;
+    const pfImpact = calcPFImpact(accountingAwarePL, accountingAwarePortfolioSize);
     
     const finalOpenQty = Math.max(0, openQty);
 
@@ -375,24 +387,30 @@ function recalculateAllTrades(
     const accrualPL = trade.plRs || 0;
     const cashPL = calculateTradePL(trade, true); // Cash basis P/L
 
-    // Get portfolio size for this trade's date
-    const tradePortfolioSize = getTruePortfolioSize ?
-      (() => {
-        try {
-          const tradeDate = new Date(trade.date);
-          const month = tradeDate.toLocaleString('default', { month: 'short' });
-          const year = tradeDate.getFullYear();
-          return getTruePortfolioSize(month, year) || 100000;
-        } catch {
-          return 100000;
-        }
-      })() : 100000;
+    // Helper function to get portfolio size based on accounting method
+    const getPortfolioSizeForAccounting = (useCashBasisForCalc: boolean) => {
+      if (!getTruePortfolioSize) return 100000;
 
-    // Calculate PF impact for both methods and store them
+      try {
+        const relevantDate = getTradeDateForAccounting(trade, useCashBasisForCalc);
+        const date = new Date(relevantDate);
+        const month = date.toLocaleString('default', { month: 'short' });
+        const year = date.getFullYear();
+        return getTruePortfolioSize(month, year) || 100000;
+      } catch {
+        return 100000;
+      }
+    };
+
+    // Get portfolio sizes for both accounting methods
+    const accrualPortfolioSize = getPortfolioSizeForAccounting(false); // Entry date portfolio
+    const cashPortfolioSize = getPortfolioSizeForAccounting(true);     // Exit date portfolio
+
+    // Calculate PF impact using correct portfolio size for each method
     const accrualPfImpact = trade.positionStatus !== 'Open' ?
-      calcPFImpact(accrualPL, tradePortfolioSize) : 0;
+      calcPFImpact(accrualPL, accrualPortfolioSize) : 0;
     const cashPfImpact = trade.positionStatus !== 'Open' ?
-      calcPFImpact(cashPL, tradePortfolioSize) : 0;
+      calcPFImpact(cashPL, cashPortfolioSize) : 0;
 
     // Use the appropriate method for cumulative calculation
     const currentPfImpact = useCashBasis ? cashPfImpact : accrualPfImpact;
@@ -493,13 +511,24 @@ export const useTrades = () => {
     // Perform initial recalculation using the memoized helper.
     // This will use the initial `getPortfolioSize` available at mount.
     const initiallyCalculatedTrades = loadedTrades.length > 0 ? recalculateTradesWithCurrentPortfolio(loadedTrades) : [];
-    setTrades(initiallyCalculatedTrades);
 
-    setSearchQuery(settings?.search_query || '');
-    setStatusFilter(settings?.status_filter || '');
+    // Temporary fix: Reset filters to avoid "No matching trades" issue
+    const savedSearchQuery = settings?.search_query || '';
+    const savedStatusFilter = settings?.status_filter || '';
+
+
+
+    // Set all state together to avoid race conditions
+    setTrades(initiallyCalculatedTrades);
+    setSearchQuery(savedSearchQuery);
+    setStatusFilter(savedStatusFilter);
     setSortDescriptor(settings?.sort_descriptor || { column: 'tradeNo', direction: 'ascending' });
     setVisibleColumns(settings?.visible_columns || DEFAULT_VISIBLE_COLUMNS);
-    setIsLoading(false);
+
+    // Use a small delay to ensure all state is set before marking as loaded
+    setTimeout(() => {
+      setIsLoading(false);
+    }, 50);
   }, []); // Empty dependency array means it runs only once on mount.
 
   // Save trade settings to localStorage
@@ -695,9 +724,10 @@ export const useTrades = () => {
 
           if (exits.length > 0) {
             // Create a trade entry for each exit (for cash basis)
-            exits.forEach(exit => {
+            exits.forEach((exit, exitIndex) => {
               const expandedTrade: Trade = {
                 ...trade,
+                id: `${trade.id}_exit_${exitIndex}`, // Generate unique ID for each exit
                 _cashBasisExit: {
                   date: exit.date,
                   qty: exit.qty,
@@ -707,6 +737,10 @@ export const useTrades = () => {
               expandedTrades.push(expandedTrade);
             });
           } else {
+            // Debug: Log trades with no exit data
+            if (process.env.NODE_ENV === 'development' && (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial')) {
+              console.log(`⚠️ [No Exit Data] ${trade.name}: status=${trade.positionStatus}, exit1Date=${trade.exit1Date}, exit1Qty=${trade.exit1Qty}, plRs=${trade.plRs}`);
+            }
             // Fallback: if no individual exit data, use the original trade
             expandedTrades.push(trade);
           }
@@ -766,6 +800,19 @@ export const useTrades = () => {
           comparison = StringA.localeCompare(StringB);
         }
 
+        // For cash basis, add secondary sorting to handle expanded trades properly
+        if (useCashBasis && comparison === 0) {
+          // If primary sort values are equal, sort by exit date for cash basis
+          const aExitDate = a._cashBasisExit?.date || a.date || '';
+          const bExitDate = b._cashBasisExit?.date || b.date || '';
+
+          if (aExitDate && bExitDate) {
+            const aTime = new Date(aExitDate).getTime();
+            const bTime = new Date(bExitDate).getTime();
+            comparison = aTime - bTime;
+          }
+        }
+
         return sortDescriptor.direction === "ascending" ? comparison : -comparison;
       });
     }
@@ -774,7 +821,8 @@ export const useTrades = () => {
   }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor, useCashBasis]);
 
   return {
-    trades: filteredTrades,
+    trades: filteredTrades, // Filtered and expanded trades for display
+    originalTrades: trades, // Original trades for unrealized P/L calculation
     addTrade,
     updateTrade,
     deleteTrade,
