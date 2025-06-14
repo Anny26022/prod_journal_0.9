@@ -180,13 +180,9 @@ export const usePriceTicks = (symbol: string) => {
         currentMarketStatus = 'Closed';
       }
 
-      // If status or required interval changed, clear and restart polling
-      if ((marketStatus !== currentMarketStatus) || (pollingInterval !== currentPollingInterval)) {
-          console.log(`[usePriceTicks] Status changed. Restarting polling. Old: ${marketStatus}, ${pollingInterval/1000}s. New: ${currentMarketStatus}, ${currentPollingInterval/1000}s`);
-          stopPolling();
-          startPolling(); // Restart with new interval
-          return; // Exit current interval tick
-      }
+      // CRITICAL FIX: Prevent recursive polling that causes memory leaks
+      // Instead of restarting polling, just continue with current interval
+      // The useEffect will handle interval changes when dependencies change
 
       console.log(`[usePriceTicks] Polling for ${symbol}... (Status: ${currentMarketStatus})`);
       fetchTicks(); // Let API determine appropriate parameters

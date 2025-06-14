@@ -539,11 +539,9 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
     const filteredTrades = React.useMemo(() => {
         let processedTrades = trades;
 
-        // For cash basis, expand trades to include individual exits
         if (useCashBasis) {
+            // For cash basis, expand trades to include individual exits
             const expandedTrades: any[] = [];
-
-            console.log(`🔄 [DeepAnalytics] Cash basis mode: expanding ${trades.length} trades for heatmap`);
 
             trades.forEach(trade => {
                 if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
@@ -562,24 +560,41 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
                             };
                             expandedTrades.push(expandedTrade);
                         });
-                        console.log(`📊 [DeepAnalytics] Expanded ${trade.name} into ${exits.length} exit entries`);
                     } else {
                         // Fallback: if no individual exit data, use the original trade
                         expandedTrades.push(trade);
-                        console.log(`⚠️ [DeepAnalytics] No exit data for ${trade.name}, using original trade`);
                     }
                 } else {
                     // For open positions, include as-is
                     expandedTrades.push(trade);
                 }
             });
-
-            console.log(`✅ [DeepAnalytics] Cash basis expansion complete: ${trades.length} → ${expandedTrades.length} trades`);
             processedTrades = expandedTrades;
+        } else {
+            // For accrual basis, include ALL trades (open, partial, closed)
+            // Filter out trades with zero P/L only if they are truly empty/invalid
+            processedTrades = trades.filter(trade => {
+                // Include all trades that have meaningful data
+                if (trade.positionStatus === 'Open') {
+                    return true; // Always include open positions
+                }
+
+                if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+                    // Include closed/partial trades that have P/L data
+                    const tradePL = calculateTradePL(trade, false); // accrual basis
+                    return tradePL !== 0 || trade.plRs !== 0; // Include if there's any P/L
+                }
+
+                return true; // Include other trades by default
+            });
+
+
         }
 
         // Apply date filtering
-        if (!globalStartDate && !globalEndDate) return processedTrades;
+        if (!globalStartDate && !globalEndDate) {
+            return processedTrades;
+        }
 
         return processedTrades.filter(trade => {
             const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
@@ -605,7 +620,10 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
     if (globalStartDate && globalStartDate instanceof Date && !isNaN(globalStartDate.getTime())) {
         heatmapStartDate = globalStartDate.toISOString().split('T')[0];
     } else if (minTradeDate && typeof minTradeDate === 'string' && minTradeDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        heatmapStartDate = minTradeDate;
+        // Ensure minimum 3-month range for proper heatmap display
+        const minDate = new Date(minTradeDate);
+        minDate.setMonth(minDate.getMonth() - 1); // Start 1 month before earliest trade
+        heatmapStartDate = minDate.toISOString().split('T')[0];
     } else {
         heatmapStartDate = '2024-07-01'; // fallback
     }
@@ -614,10 +632,33 @@ const DeepAnalyticsPage: React.FC = () => { // Renamed component
     if (globalEndDate && globalEndDate instanceof Date && !isNaN(globalEndDate.getTime())) {
         heatmapEndDate = globalEndDate.toISOString().split('T')[0];
     } else if (maxTradeDate && typeof maxTradeDate === 'string' && maxTradeDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        heatmapEndDate = maxTradeDate;
+        // Ensure minimum 3-month range for proper heatmap display
+        const maxDate = new Date(maxTradeDate);
+        maxDate.setMonth(maxDate.getMonth() + 1); // End 1 month after latest trade
+        heatmapEndDate = maxDate.toISOString().split('T')[0];
     } else {
-        heatmapEndDate = '2025-01-31'; // fallback
+        // Use current date + 1 month as fallback to ensure we cover recent trades
+        const fallbackEndDate = new Date();
+        fallbackEndDate.setMonth(fallbackEndDate.getMonth() + 1);
+        heatmapEndDate = fallbackEndDate.toISOString().split('T')[0];
     }
+
+    // Ensure minimum date range for proper heatmap display
+    const startDateObj = new Date(heatmapStartDate);
+    const endDateObj = new Date(heatmapEndDate);
+    const daysDifference = Math.ceil((endDateObj.getTime() - startDateObj.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (daysDifference < 90) { // Less than 3 months
+        // Expand the range to at least 3 months
+        const centerDate = new Date(startDateObj.getTime() + (endDateObj.getTime() - startDateObj.getTime()) / 2);
+        centerDate.setMonth(centerDate.getMonth() - 1.5); // 1.5 months before center
+        heatmapStartDate = centerDate.toISOString().split('T')[0];
+
+        centerDate.setMonth(centerDate.getMonth() + 3); // 3 months total range
+        heatmapEndDate = centerDate.toISOString().split('T')[0];
+    }
+
+
 
 
 

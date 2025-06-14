@@ -821,7 +821,7 @@ import * as Papa from "papaparse"; // Centralized import
               formData._cmpAutoFetched === false
                 ? "Manually entered price"
                 : formData._cmpAutoFetched === true
-                  ? "Auto-fetched from market data - not editable"
+                  ? ""
                   : latestPrice?.close
                     ? "Price available - will auto-update"
                     : ""

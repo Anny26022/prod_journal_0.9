@@ -18,6 +18,7 @@ import { GlobalFilterBar } from "./components/GlobalFilterBar";
 import { TradeTrackerLogo } from './components/icons/TradeTrackerLogo';
 import { AnimatedBrandName } from './components/AnimatedBrandName';
 import DeepAnalyticsPage from "./pages/DeepAnalyticsPage";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { Analytics } from '@vercel/analytics/react';
 // Removed Supabase import - using localStorage only
 
@@ -244,26 +245,28 @@ export default function App() {
 
           {/* Main Content */}
           <main ref={mainContentRef} className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
-            <div className={isFullWidthEnabled ? "py-6" : "max-w-7xl mx-auto py-6"}>
-              <Switch>
-                <Route path="/analytics">
-                  <TradeAnalytics />
-                </Route>
-                <Route exact path="/" render={(props) => (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <TradeJournal {...props} toggleFullscreen={handleToggleMainContentFullscreen} isFullscreen={isMainContentFullscreen} />
-                  </motion.div>
-                )} />
-                <Route path="/tax-analytics" component={TaxAnalytics} />
-                <Route path="/monthly-performance" component={MonthlyPerformanceTable} />
-                <Route path="/deep-analytics" component={DeepAnalyticsPage} />
-              </Switch>
-            </div>
+            <ErrorBoundary>
+              <div className={isFullWidthEnabled ? "py-6" : "max-w-7xl mx-auto py-6"}>
+                <Switch>
+                  <Route path="/analytics">
+                    <TradeAnalytics />
+                  </Route>
+                  <Route exact path="/" render={(props) => (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <TradeJournal {...props} toggleFullscreen={handleToggleMainContentFullscreen} isFullscreen={isMainContentFullscreen} />
+                    </motion.div>
+                  )} />
+                  <Route path="/tax-analytics" component={TaxAnalytics} />
+                  <Route path="/monthly-performance" component={MonthlyPerformanceTable} />
+                  <Route path="/deep-analytics" component={DeepAnalyticsPage} />
+                </Switch>
+              </div>
+            </ErrorBoundary>
           </main>
 
           <ProfileSettingsModal

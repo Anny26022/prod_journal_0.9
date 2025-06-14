@@ -34,31 +34,38 @@ export function calcAvgExitPrice(exits: { price: number, qty: number }[]) {
 }
 
 export function calcStockMove(
-  avgEntry: number, 
-  avgExit: number, 
-  cmp: number, 
-  openQty: number, 
+  avgEntry: number,
+  avgExit: number,
+  cmp: number,
+  openQty: number,
   exitedQty: number,
   positionStatus: 'Open' | 'Closed' | 'Partial',
   buySell: 'Buy' | 'Sell' = 'Buy'
 ): number {
-  if (!avgEntry) return 0;
+  // Edge case handling
+  if (!avgEntry || avgEntry <= 0) return 0;
+  if (typeof openQty !== 'number' || typeof exitedQty !== 'number') return 0;
+  if (openQty < 0 || exitedQty < 0) return 0; // Handle negative quantities
+
   const totalQty = openQty + exitedQty;
   if (totalQty === 0) return 0;
+
+  // Validate position status
+  if (!['Open', 'Closed', 'Partial'].includes(positionStatus)) return 0;
 
   let movePercentage = 0;
 
   if (positionStatus === 'Open') {
     // For open positions, use CMP for the entire position
-    if (!cmp) return 0;
+    if (!cmp || cmp <= 0) return 0; // Enhanced edge case handling
     movePercentage = ((cmp - avgEntry) / avgEntry) * 100;
   } else if (positionStatus === 'Closed') {
     // For closed positions, use actual exit prices
-    if (!avgExit) return 0;
+    if (!avgExit || avgExit <= 0) return 0; // Enhanced edge case handling
     movePercentage = ((avgExit - avgEntry) / avgEntry) * 100;
   } else if (positionStatus === 'Partial') {
     // For partial positions, calculate weighted average of realized and unrealized moves
-    if (!cmp || !avgExit) return 0;
+    if (!cmp || cmp <= 0 || !avgExit || avgExit <= 0) return 0; // Enhanced edge case handling
     
     const realizedMove = ((avgExit - avgEntry) / avgEntry) * 100;
     const unrealizedMove = ((cmp - avgEntry) / avgEntry) * 100;

@@ -99,6 +99,65 @@ function saveTradesToLocalStorage(trades: Trade[]) {
   } catch (error) {
     console.error('localStorage save error:', error);
 
+    // CRITICAL FIX: Handle localStorage quota exceeded
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      console.warn('🚨 localStorage quota exceeded! Attempting cleanup...');
+
+      // ENHANCED: Prompt user to use existing download button
+      const userChoice = confirm(
+        '⚠️ STORAGE FULL WARNING ⚠️\n\n' +
+        'Your browser storage is full!\n\n' +
+        'RECOMMENDED: Use the "Download Excel" button in your trade journal to backup your data before we clean up old files.\n\n' +
+        'Click "OK" to proceed with automatic cleanup, or "Cancel" to go back and download your backup first.\n\n' +
+        '(We will automatically remove old temporary files to make room)'
+      );
+
+      if (!userChoice) {
+        // User chose to cancel - don't proceed with cleanup
+        alert('💾 Please use the "Download Excel" button to backup your trades, then try saving again.');
+        return false;
+      }
+
+      try {
+        // Clean up old data to free space
+        const allKeys = Object.keys(localStorage);
+        const oldKeys = allKeys.filter(key =>
+          key.startsWith('trade_') ||
+          key.includes('_backup') ||
+          key.includes('temp_')
+        );
+
+        // Remove old temporary keys
+        oldKeys.forEach(key => {
+          if (key !== STORAGE_KEY && key !== `${STORAGE_KEY}_backup`) {
+            localStorage.removeItem(key);
+            console.log(`🧹 Removed old data: ${key}`);
+          }
+        });
+
+        // Try to save again after cleanup
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(trades));
+        console.log('✅ Successfully saved after cleanup');
+
+        // Show success message to user
+        alert('✅ Storage cleanup completed!\n\nYour trade data has been saved successfully. Old temporary files were removed to free up space.');
+
+        return true;
+
+      } catch (cleanupError) {
+        console.error('❌ Failed to save even after cleanup:', cleanupError);
+
+        // Show error message to user
+        alert(
+          '❌ CRITICAL: Unable to save your trade data!\n\n' +
+          'Storage is still full even after cleanup. Please:\n' +
+          '1. Clear some browser data manually\n' +
+          '2. Download your backup if you haven\'t already\n' +
+          '3. Consider using fewer trades or archiving old data'
+        );
+      }
+    }
+
     // Try to restore from backup if save failed
     try {
       const backup = localStorage.getItem(`${STORAGE_KEY}_backup`);
@@ -358,8 +417,35 @@ function recalculateAllTrades(
     // Destructure to omit openHeat if it exists on the trade object from localStorage
     const { openHeat, ...restOfTrade } = trade as any; // Use 'as any' for robust destructuring if openHeat might not exist
 
+    // Calculate position status based on quantities ONLY if user has never manually set it
+    let calculatedPositionStatus = restOfTrade.positionStatus; // Keep existing by default
+
+    const hasUserEditedPositionStatus = restOfTrade._userEditedFields?.includes('positionStatus');
+    if (!hasUserEditedPositionStatus) {
+      // Auto-calculate position status only if user hasn't manually set it
+      if (finalOpenQty <= 0 && exitedQty > 0) {
+        calculatedPositionStatus = 'Closed';
+      } else if (exitedQty > 0 && finalOpenQty > 0) {
+        calculatedPositionStatus = 'Partial';
+      } else {
+        calculatedPositionStatus = 'Open';
+      }
+
+    }
+
+    // Preserve user-controlled fields that should not be auto-updated
+    const userControlledFields = ['positionStatus', 'buySell', 'setup', 'exitTrigger', 'proficiencyGrowthAreas', 'planFollowed', 'notes', 'tradeNo'];
+    const preservedFields: Record<string, any> = {};
+
+    userControlledFields.forEach(field => {
+      if (restOfTrade._userEditedFields?.includes(field) && restOfTrade[field as keyof Trade] !== undefined) {
+        preservedFields[field] = restOfTrade[field as keyof Trade];
+      }
+    });
+
     return {
       ...restOfTrade,
+      // Apply calculated fields
       name: (restOfTrade.name || '').toUpperCase(),
       avgEntry,
       positionSize,
@@ -373,7 +459,12 @@ function recalculateAllTrades(
       realisedAmount,
       plRs,
       pfImpact,
+      positionStatus: calculatedPositionStatus, // Use calculated or preserved status
       cummPf: 0, // Placeholder, will be updated in second pass
+      // Preserve user-edited fields
+      ...preservedFields,
+      // Always preserve the user edit tracking
+      _userEditedFields: restOfTrade._userEditedFields || []
     };
   });
 
@@ -439,11 +530,14 @@ const ALL_COLUMNS = [
   'planFollowed', 'exitTrigger', 'proficiencyGrowthAreas', 'unrealizedPL', 'actions', 'notes'
 ];
 
-// Optimized default columns for better performance - show only essential columns initially
+// All columns enabled by default as requested
 const DEFAULT_VISIBLE_COLUMNS = [
-  'tradeNo', 'date', 'name', 'setup', 'buySell', 'entry', 'sl', 'cmp',
-  'initialQty', 'positionSize', 'openQty', 'exitedQty', 'avgExitPrice',
-  'rewardRisk', 'holdingDays', 'positionStatus', 'plRs', 'actions'
+  'tradeNo', 'date', 'name', 'setup', 'buySell', 'entry', 'avgEntry', 'sl', 'slPercent', 'tsl', 'cmp',
+  'initialQty', 'pyramid1Price', 'pyramid1Qty', 'pyramid1Date', 'pyramid2Price', 'pyramid2Qty', 'pyramid2Date',
+  'positionSize', 'allocation', 'exit1Price', 'exit1Qty', 'exit1Date', 'exit2Price', 'exit2Qty', 'exit2Date',
+  'exit3Price', 'exit3Qty', 'exit3Date', 'openQty', 'exitedQty', 'avgExitPrice', 'stockMove', 'openHeat',
+  'rewardRisk', 'holdingDays', 'positionStatus', 'realisedAmount', 'plRs', 'pfImpact', 'cummPf',
+  'planFollowed', 'exitTrigger', 'proficiencyGrowthAreas', 'actions', 'unrealizedPL', 'notes'
 ];
 
 export const useTrades = () => {
@@ -544,22 +638,22 @@ export const useTrades = () => {
     }
   }, [searchQuery, statusFilter, sortDescriptor, visibleColumns, isLoading]);
 
-  // Debounced save to localStorage to prevent excessive writes
-  React.useEffect(() => {
-    if (trades.length > 0 || !isLoading) {
-      const timeoutId = setTimeout(() => {
-        saveTradesToLocalStorage(trades);
-      }, 100); // Reduced to 100ms for better responsiveness
-
-      return () => clearTimeout(timeoutId);
-    }
-  }, [trades, isLoading]);
+  // DISABLED: This effect was causing race conditions with user input
+  // localStorage saving is now handled directly in updateTrade, addTrade, deleteTrade functions
+  // React.useEffect(() => {
+  //   if (trades.length > 0 || !isLoading) {
+  //     const timeoutId = setTimeout(() => {
+  //       saveTradesToLocalStorage(trades);
+  //     }, 100);
+  //     return () => clearTimeout(timeoutId);
+  //   }
+  // }, [trades, isLoading]);
 
   // Recalculate trades when accounting method changes (optimized to prevent excessive re-renders)
   React.useEffect(() => {
     // Only recalculate if accounting method actually changed
     if (prevAccountingMethodRef.current !== accountingMethod && !isLoading && trades.length > 0) {
-      console.log(`🔄 Accounting method changed from ${prevAccountingMethodRef.current} to ${accountingMethod}, recalculating trades...`);
+
 
       // Debounce the recalculation to prevent rapid successive calls
       const timeoutId = setTimeout(() => {
@@ -578,30 +672,131 @@ export const useTrades = () => {
   const addTrade = React.useCallback((trade: Trade) => {
     setTrades(prev => {
       // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio([trade, ...prev]);
+      // Add new trade at the END of the array so it appears at the bottom
+      const newTrades = recalculateTradesWithCurrentPortfolio([...prev, trade]);
       saveTradesToLocalStorage(newTrades); // Persist to localStorage
       return newTrades;
     });
   }, [recalculateTradesWithCurrentPortfolio]); // Dependency on the memoized helper
 
-  const updateTrade = React.useCallback((updatedTrade: Trade) => {
-    setTrades(prev => {
-      // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio(
-        prev.map(trade => trade.id === updatedTrade.id ? updatedTrade : trade)
-      );
-      saveTradesToLocalStorage(newTrades); // Persist to localStorage
-      return newTrades;
-    });
+  // Debounced update function to prevent excessive recalculations
+  const debouncedRecalculateRef = React.useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdatesRef = React.useRef<Map<string, Trade>>(new Map());
+  const updateCallbacksRef = React.useRef<Map<string, () => void>>(new Map());
+
+  const updateTrade = React.useCallback((updatedTrade: Trade, onComplete?: () => void) => {
+    console.log(`✏️ [updateTrade] Updating trade: ${updatedTrade.name} (${updatedTrade.id})`);
+
+    // Store pending update
+    pendingUpdatesRef.current.set(updatedTrade.id, updatedTrade);
+    console.log(`✏️ [updateTrade] Stored pending update. Total pending: ${pendingUpdatesRef.current.size}`);
+
+    // Store callback if provided
+    if (onComplete) {
+      updateCallbacksRef.current.set(updatedTrade.id, onComplete);
+    }
+
+    // Clear existing debounce timer
+    if (debouncedRecalculateRef.current) {
+      clearTimeout(debouncedRecalculateRef.current);
+      console.log(`✏️ [updateTrade] Cleared existing debounce timer`);
+    }
+
+    // Schedule debounced recalculation
+    debouncedRecalculateRef.current = setTimeout(() => {
+      console.log(`⏰ [updateTrade] Debounced execution starting...`);
+
+      // Get all pending updates and callbacks
+      const pendingUpdates = Array.from(pendingUpdatesRef.current.values());
+      const callbacks = Array.from(updateCallbacksRef.current.values());
+      console.log(`⏰ [updateTrade] Processing ${pendingUpdates.length} pending updates`);
+
+      // Clear pending updates and callbacks
+      pendingUpdatesRef.current.clear();
+      updateCallbacksRef.current.clear();
+
+      // Apply all pending updates and recalculate
+      setTrades(currentTrades => {
+        console.log(`⏰ [updateTrade] Applying updates to ${currentTrades.length} trades`);
+
+        const updatedTrades = currentTrades.map(trade => {
+          // CRITICAL FIX: Handle cash basis expanded trade IDs
+          // Find pending updates by checking both exact ID match and original ID match
+          const pendingUpdate = pendingUpdates.find(update => {
+            // Direct match (for accrual basis)
+            if (update.id === trade.id) return true;
+
+            // Original ID match (for cash basis expanded trades)
+            const originalUpdateId = update.id.includes('_exit_') ? update.id.split('_exit_')[0] : update.id;
+            return originalUpdateId === trade.id;
+          });
+
+          if (pendingUpdate) {
+            console.log(`⏰ [updateTrade] Applying update to trade: ${trade.name} (original ID: ${trade.id}, update ID: ${pendingUpdate.id})`);
+
+            // CRITICAL: For cash basis updates, we need to merge the changes into the original trade
+            // but preserve the original trade ID (not the expanded ID)
+            const updatedTrade = { ...pendingUpdate, id: trade.id };
+            return updatedTrade;
+          }
+          return trade;
+        });
+
+        console.log(`⏰ [updateTrade] Starting recalculation...`);
+        const recalculatedTrades = recalculateTradesWithCurrentPortfolio(updatedTrades);
+
+        console.log(`⏰ [updateTrade] Saving to localStorage...`);
+        const saveSuccess = saveTradesToLocalStorage(recalculatedTrades);
+        console.log(`⏰ [updateTrade] localStorage save ${saveSuccess ? 'successful' : 'failed'}`);
+
+        // Execute all callbacks after update is complete
+        callbacks.forEach(callback => {
+          try {
+            callback();
+          } catch (error) {
+            console.error('Error executing update callback:', error);
+          }
+        });
+
+        console.log(`✅ [updateTrade] Update process completed`);
+        return recalculatedTrades;
+      });
+    }, 200); // Reduced to 200ms to prevent race conditions with user input
   }, [recalculateTradesWithCurrentPortfolio]);
 
   const deleteTrade = React.useCallback((id: string) => {
+    console.log(`🗑️ [deleteTrade] Starting delete for trade ID: ${id}`);
+
+    // CRITICAL FIX: Handle cash basis expanded trade IDs
+    // Extract original trade ID from expanded IDs like "original_id_exit_0"
+    const originalTradeId = id.includes('_exit_') ? id.split('_exit_')[0] : id;
+    console.log(`🗑️ [deleteTrade] Original trade ID: ${originalTradeId} (from ${id})`);
+
     setTrades(prev => {
+      console.log(`🗑️ [deleteTrade] Current trades count: ${prev.length}`);
+
+      // Find the trade to delete using the original ID
+      const tradeToDelete = prev.find(trade => trade.id === originalTradeId);
+      if (!tradeToDelete) {
+        console.error(`❌ [deleteTrade] Trade with original ID ${originalTradeId} not found!`);
+        console.log(`🗑️ [deleteTrade] Available trade IDs:`, prev.map(t => t.id));
+        return prev; // Return unchanged if trade not found
+      }
+
+      console.log(`🗑️ [deleteTrade] Found trade to delete: ${tradeToDelete.name} (${tradeToDelete.tradeNo})`);
+
+      // Filter out the trade using the original ID
+      const filteredTrades = prev.filter(trade => trade.id !== originalTradeId);
+      console.log(`🗑️ [deleteTrade] After filtering: ${filteredTrades.length} trades remaining`);
+
       // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio(
-        prev.filter(trade => trade.id !== id)
-      );
-      saveTradesToLocalStorage(newTrades); // Persist to localStorage
+      const newTrades = recalculateTradesWithCurrentPortfolio(filteredTrades);
+      console.log(`🗑️ [deleteTrade] After recalculation: ${newTrades.length} trades`);
+
+      // Persist to localStorage
+      const saveSuccess = saveTradesToLocalStorage(newTrades);
+      console.log(`🗑️ [deleteTrade] localStorage save ${saveSuccess ? 'successful' : 'failed'}`);
+
       return newTrades;
     });
   }, [recalculateTradesWithCurrentPortfolio]);
@@ -684,25 +879,28 @@ export const useTrades = () => {
     return false;
   }, []);
 
-  // Helper function to get accounting-aware values for display (optimized with caching)
+  // Helper function to get accounting-aware values for display (FIXED - always calculate)
   const getAccountingAwareValues = React.useCallback((trade: Trade) => {
-    const isAccrual = !useCashBasis;
+    // CRITICAL FIX: Always calculate P/L instead of relying on potentially missing cached values
+    const plRs = calculateTradePL(trade, useCashBasis);
 
-    // Use cached values when available to avoid recalculation
-    const plRs = isAccrual
-      ? (trade._accrualPL ?? trade.plRs ?? 0)
-      : (trade._cashPL ?? calculateTradePL(trade, true));
+    // Calculate portfolio impact based on the calculated P/L
+    const currentPortfolioSize = getPortfolioSize ?
+      (() => {
+        const tradeDate = new Date(trade.date);
+        const month = tradeDate.toLocaleString('default', { month: 'short' });
+        const year = tradeDate.getFullYear();
+        return getPortfolioSize(month, year);
+      })() : portfolioSize;
 
-    const pfImpact = isAccrual
-      ? (trade._accrualPfImpact ?? trade.pfImpact ?? 0)
-      : (trade._cashPfImpact ?? 0);
+    const pfImpact = currentPortfolioSize > 0 ? (plRs / currentPortfolioSize) * 100 : 0;
 
     return {
       plRs,
       realisedAmount: plRs, // Same as plRs for display purposes
       pfImpact,
     };
-  }, [useCashBasis]);
+  }, [useCashBasis, calculateTradePL, getPortfolioSize, portfolioSize]);
 
   const filteredTrades = React.useMemo(() => {
     let result = [...trades];
@@ -816,6 +1014,26 @@ export const useTrades = () => {
         return sortDescriptor.direction === "ascending" ? comparison : -comparison;
       });
     }
+
+    // CRITICAL FIX: Recalculate cumulative PF based on display order
+    // This ensures cumulative values make sense based on how trades are actually shown
+    let runningDisplayCummPf = 0;
+    result = result.map((trade) => {
+      // Get the accounting-aware PF Impact for this trade
+      const currentPfImpact = useCashBasis
+        ? (trade._cashPfImpact ?? 0)
+        : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+
+      // Only include PF Impact from closed/partial trades in cumulative calculation
+      if (trade.positionStatus !== 'Open') {
+        runningDisplayCummPf += currentPfImpact;
+      }
+
+      return {
+        ...trade,
+        cummPf: runningDisplayCummPf // Update with display-order cumulative PF
+      };
+    });
 
     return result;
   }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor, useCashBasis]);

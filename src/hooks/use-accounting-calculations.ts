@@ -1,7 +1,8 @@
 import { useMemo, useCallback } from 'react';
 import { Trade } from '../types/trade';
 import { useAccountingMethod } from '../context/AccountingMethodContext';
-import { calculateTradePL } from '../utils/accountingUtils';
+import { calculateTradePL, getTradeDateForAccounting } from '../utils/accountingUtils';
+import { calcHoldingDays } from '../utils/tradeCalculations';
 
 /**
  * Shared hook for accounting-aware P/L calculations
@@ -85,14 +86,42 @@ export const useAccountingCalculations = (trades: Trade[]) => {
       ? tradesWithAccountingPL.reduce((sum, t) => sum + (t.allocation || 0), 0) / totalTrades 
       : 0;
     
-    const avgHoldingDays = totalTrades > 0 
+    // Average holding days - always use FIFO logic regardless of accounting method
+    const avgHoldingDays = totalTrades > 0
       ? tradesWithAccountingPL.reduce((sum, trade) => {
-          if (!trade.entryDate || !trade.exitDate) return sum;
-          const entryDate = new Date(trade.entryDate);
-          const exitDate = new Date(trade.exitDate);
-          const holdingDays = Math.abs((exitDate.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24));
-          return sum + holdingDays;
-        }, 0) / totalTrades 
+          // Use existing FIFO-based calcHoldingDays function
+          const pyramidDates = [
+            { date: trade.pyramid1Date, qty: trade.pyramid1Qty || 0 },
+            { date: trade.pyramid2Date, qty: trade.pyramid2Qty || 0 }
+          ].filter(p => p.date && p.date.trim() !== '' && p.qty > 0);
+
+          const exitDates = [
+            { date: trade.exit1Date, qty: trade.exit1Qty || 0 },
+            { date: trade.exit2Date, qty: trade.exit2Qty || 0 },
+            { date: trade.exit3Date, qty: trade.exit3Qty || 0 }
+          ].filter(e => e.date && e.date.trim() !== '' && e.qty > 0);
+
+          // Find primary exit date for closed trades
+          let primaryExitDate: string | null = null;
+          if (trade.positionStatus === 'Closed' || trade.positionStatus === 'Partial') {
+            const validExitDates = [trade.exit1Date, trade.exit2Date, trade.exit3Date]
+              .filter(Boolean) as string[];
+            if (validExitDates.length > 0) {
+              primaryExitDate = validExitDates.sort((a, b) =>
+                new Date(a).getTime() - new Date(b).getTime()
+              )[0];
+            }
+          }
+
+          const fifoHoldingDays = calcHoldingDays(
+            trade.date,
+            primaryExitDate,
+            pyramidDates,
+            exitDates
+          );
+
+          return sum + fifoHoldingDays;
+        }, 0) / totalTrades
       : 0;
 
     // Risk-reward calculations
@@ -108,8 +137,10 @@ export const useAccountingCalculations = (trades: Trade[]) => {
       ? (tradesWithAccountingPL.filter(t => t.planFollowed).length / totalTrades) * 100 
       : 0;
 
-    // Open positions
-    const openPositions = tradesWithAccountingPL.filter(t => !t.exitDate).length;
+    // Open positions - use positionStatus instead of exitDate
+    const openPositions = tradesWithAccountingPL.filter(t =>
+      t.positionStatus === 'Open' || t.positionStatus === 'Partial'
+    ).length;
 
     return {
       tradesWithAccountingPL,

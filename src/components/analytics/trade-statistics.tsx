@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Trade } from "../../types/trade";
 import { calcWeightedRewardRisk } from '../../utils/tradeCalculations';
 import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
+import MobileTooltip from "../ui/MobileTooltip";
 
 interface StatProps {
   label: string;
@@ -45,7 +46,7 @@ const Stat: React.FC<StatProps> = ({ label, value, tooltip, isPercentage, index 
             {label}
           </span>
           {tooltip && (
-            <Tooltip 
+            <MobileTooltip
               content={tooltip}
               classNames={{
                 base: "py-2 px-4 shadow-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800",
@@ -59,7 +60,7 @@ const Stat: React.FC<StatProps> = ({ label, value, tooltip, isPercentage, index 
               >
                 <Icon icon="lucide:info" className="w-4 h-4 text-foreground-400 dark:text-gray-500" />
               </motion.span>
-            </Tooltip>
+            </MobileTooltip>
           )}
         </div>
         

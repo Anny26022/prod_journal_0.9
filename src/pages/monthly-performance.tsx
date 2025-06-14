@@ -8,6 +8,7 @@ import { calcXIRR } from "../utils/tradeCalculations";
 import { useAccountingMethod } from "../context/AccountingMethodContext";
 import { useGlobalFilter } from "../context/GlobalFilterContext";
 import { getTradesForMonth, calculateTradePL, getTradeDateForAccounting } from "../utils/accountingUtils";
+import MobileTooltip from "../components/ui/MobileTooltip";
 
 // Helper function to create safe dependencies for useEffect/useMemo
 const safeDeps = (deps: any[]) => deps;
@@ -446,7 +447,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Starting Capital
-          <Tooltip content={
+          <MobileTooltip content={
         <div className="max-w-xs text-xs p-1">
           <div>Capital at the start of the month, before trades and capital changes.</div>
           <div className="mt-2 font-semibold">Calculation Priority:</div>
@@ -457,7 +458,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
         </div>
       } placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -466,7 +467,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Added/Withdrawn
-          <Tooltip
+          <MobileTooltip
             content={
               <div className="max-w-xs text-xs p-1">
                 <b>Assumption:</b><br />
@@ -477,7 +478,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
             placement="top"
           >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -682,9 +683,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Trades
-          <Tooltip content="Number of trades closed in this month." placement="top">
+          <MobileTooltip content="Number of trades closed in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -693,9 +694,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           % Win
-          <Tooltip content="Percentage of trades closed with a profit in this month." placement="top">
+          <MobileTooltip content="Percentage of trades closed with a profit in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -704,9 +705,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Avg Gain
-          <Tooltip content="Average percentage gain for winning trades in this month." placement="top">
+          <MobileTooltip content="Average percentage gain for winning trades in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -715,9 +716,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Avg Loss
-          <Tooltip content="Average percentage loss for losing trades in this month." placement="top">
+          <MobileTooltip content="Average percentage loss for losing trades in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -726,9 +727,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Avg R:R
-          <Tooltip content="Average reward-to-risk ratio for trades in this month." placement="top">
+          <MobileTooltip content="Average reward-to-risk ratio for trades in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -737,9 +738,9 @@ export const MonthlyPerformanceTable: React.FC = () => {
       label: (
         <div className="flex items-center gap-1">
           Avg Days
-          <Tooltip content="Average holding period (in days) for trades closed in this month." placement="top">
+          <MobileTooltip content="Average holding period (in days) for trades closed in this month." placement="top">
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       )
     },
@@ -1008,7 +1009,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
                                 <span className="text-foreground-500 text-sm pr-1">₹</span>
                               }
                             />
-                            <Tooltip content="Click to save starting capital" placement="top">
+                            <MobileTooltip content="Click to save starting capital" placement="top">
                               <Button
                                 isIconOnly
                                 size="sm"
@@ -1017,7 +1018,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
                               >
                                 <Icon icon="lucide:check" className="h-4 w-4 text-success-500" />
                               </Button>
-                            </Tooltip>
+                            </MobileTooltip>
                           </div>
                         </TableCell>
                       );
@@ -1062,7 +1063,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
                           <span className={`${hasCustomSize ? 'font-medium text-primary-600 dark:text-primary-400' : 'text-foreground dark:text-foreground-200'}`}>
                             {value === '-' ? '-' : Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
-                          <Tooltip 
+                          <MobileTooltip
                             content={<div className="max-w-xs text-xs p-1">{tooltipDerivation}</div>}
                             placement="top"
                             radius="sm"
@@ -1070,7 +1071,7 @@ export const MonthlyPerformanceTable: React.FC = () => {
                             classNames={{ content: "bg-content1 border border-divider z-50 max-w-xs" }}
                           >
                             <Icon icon="lucide:info" className="h-2.5 w-2.5 text-foreground-400 cursor-help" />
-                          </Tooltip>
+                          </MobileTooltip>
                           <span className="text-foreground-400">
                             <Icon icon="lucide:edit-2" className="h-2.5 w-2.5" />
                           </span>

@@ -74,16 +74,20 @@ const SetupFrequencyChart: React.FC<SetupFrequencyChartProps> = ({ trades }) => 
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                         <XAxis type="number" hide />
-                        <YAxis 
-                            dataKey="name" 
-                            type="category" 
+                        <YAxis
+                            dataKey="name"
+                            type="category"
                             width={80}
-                            tick={{ fontSize: 12, fill: 'var(--foreground)' }}
+                            tick={{ fontSize: 12, fill: '#11181C' }} // Light mode foreground
                             tickLine={false}
                             axisLine={false}
                             interval={0}
                         />
-                        <RechartsTooltip cursor={{ fill: 'transparent' }} content={<CustomTooltip />} />
+                        <RechartsTooltip
+                            cursor={{ fill: 'transparent' }}
+                            content={<CustomTooltip />}
+                            trigger="click"
+                        />
                         <Bar dataKey="count" radius={[0, 8, 8, 0]} barSize={20}>
                             {chartData.map((entry) => (
                                 <Cell key={`cell-${entry.name}`} fill={entry.fill} />

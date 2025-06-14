@@ -81,7 +81,17 @@ const createPluginLogic = (babel: {types: typeof BabelTypes}, options: CustomPlu
           filePath = filename.split("/").pop() || filename;
         }
 
+        // Skip Fragment elements (both Fragment and React.Fragment)
         if (t.isJSXIdentifier(openingElement.name) && openingElement.name.name === "Fragment") {
+          return;
+        }
+
+        // Skip React.Fragment elements
+        if (t.isJSXMemberExpression(openingElement.name) &&
+            t.isJSXIdentifier(openingElement.name.object) &&
+            openingElement.name.object.name === "React" &&
+            t.isJSXIdentifier(openingElement.name.property) &&
+            openingElement.name.property.name === "Fragment") {
           return;
         }
 

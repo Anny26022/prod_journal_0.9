@@ -9,8 +9,10 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ReferenceLine
+  ReferenceLine,
+  Cell
 } from "recharts";
+import { motion } from "framer-motion";
 import { useTrades } from "../../hooks/use-trades";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
 import { useAccountingMethod } from "../../context/AccountingMethodContext";
@@ -24,6 +26,44 @@ const formatCurrency = (value: number) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
   }).format(value);
+};
+
+// Custom animated tooltip component
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -10 }}
+        transition={{ duration: 0.2 }}
+        className="bg-background border border-divider p-4 rounded-lg shadow-lg"
+        style={{
+          backgroundColor: "hsl(var(--heroui-content1))",
+          border: "1px solid hsl(var(--heroui-divider))",
+          borderRadius: "8px",
+          padding: "8px 12px"
+        }}
+      >
+        <p className="text-sm font-medium text-foreground mb-2">{label}</p>
+        {payload.map((entry: any, index: number) => (
+          <div key={index} className="flex items-center justify-between gap-4 mb-1">
+            <div className="flex items-center gap-2">
+              <div
+                className="w-3 h-3 rounded-sm"
+                style={{ backgroundColor: entry.color }}
+              />
+              <span className="text-sm text-foreground-600">{entry.name}:</span>
+            </div>
+            <span className="text-sm font-semibold text-foreground">
+              {entry.name === "P/L %" ? `${entry.value.toFixed(2)}%` : formatCurrency(entry.value)}
+            </span>
+          </div>
+        ))}
+      </motion.div>
+    );
+  }
+  return null;
 };
 
 interface TaxSummaryChartProps {
@@ -77,7 +117,12 @@ export const TaxSummaryChart: React.FC<TaxSummaryChartProps> = ({ taxesByMonth }
   });
 
   return (
-    <div className="h-[350px]">
+    <motion.div
+      className="h-[350px]"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
+    >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart
           data={chartData}
@@ -103,66 +148,59 @@ export const TaxSummaryChart: React.FC<TaxSummaryChartProps> = ({ taxesByMonth }
             tickLine={false}
           />
           <Tooltip
-            formatter={(value: number, name: string) => {
-              switch (name) {
-                case "plPercent":
-                  return [`${value.toFixed(2)}%`, "P/L %"];
-                case "grossPL":
-                  return [`₹ ${value.toFixed(2)}`, "Gross P/L"];
-                case "netPL":
-                  return [`₹ ${value.toFixed(2)}`, "Net P/L"];
-                case "taxes":
-                  return [`₹ ${value.toFixed(2)}`, "Taxes"];
-                default:
-                  return [value.toFixed(2), name];
-              }
-            }}
-            labelFormatter={(label) => label}
-            contentStyle={{
-              backgroundColor: "hsl(var(--heroui-content1))",
-              border: "1px solid hsl(var(--heroui-divider))",
-              borderRadius: "8px",
-              padding: "8px 12px"
-            }}
+            content={<CustomTooltip />}
+            cursor={{ fill: 'transparent' }}
           />
           <Legend />
           <ReferenceLine y={0} yAxisId="left" stroke="hsl(var(--heroui-divider))" />
-          <Bar 
-            yAxisId="left" 
-            dataKey="grossPL" 
-            name="Gross P/L" 
-            fill="hsl(var(--heroui-primary-500))" 
-            radius={[4, 4, 0, 0]} 
+          <Bar
+            yAxisId="left"
+            dataKey="grossPL"
+            name="Gross P/L"
+            fill="hsl(var(--heroui-primary-500))"
+            radius={[4, 4, 0, 0]}
             barSize={20}
+            animationBegin={0}
+            animationDuration={800}
+            animationEasing="ease-out"
           />
-          <Bar 
-            yAxisId="left" 
-            dataKey="netPL" 
-            name="Net P/L" 
-            fill="hsl(var(--heroui-success-500))" 
-            radius={[4, 4, 0, 0]} 
+          <Bar
+            yAxisId="left"
+            dataKey="netPL"
+            name="Net P/L"
+            fill="hsl(var(--heroui-success-500))"
+            radius={[4, 4, 0, 0]}
             barSize={20}
+            animationBegin={200}
+            animationDuration={800}
+            animationEasing="ease-out"
           />
-          <Bar 
-            yAxisId="left" 
-            dataKey="taxes" 
-            name="Taxes" 
-            fill="hsl(var(--heroui-danger-500))" 
-            radius={[4, 4, 0, 0]} 
+          <Bar
+            yAxisId="left"
+            dataKey="taxes"
+            name="Taxes"
+            fill="hsl(var(--heroui-danger-500))"
+            radius={[4, 4, 0, 0]}
             barSize={20}
+            animationBegin={400}
+            animationDuration={800}
+            animationEasing="ease-out"
           />
-          <Line 
-            yAxisId="right" 
-            type="monotone" 
-            dataKey="plPercent" 
-            name="P/L %" 
-            stroke="hsl(var(--heroui-warning-500))" 
+          <Line
+            yAxisId="right"
+            type="monotone"
+            dataKey="plPercent"
+            name="P/L %"
+            stroke="hsl(var(--heroui-warning-500))"
             strokeWidth={2}
             dot={{ r: 4 }}
             activeDot={{ r: 6 }}
+            animationBegin={600}
+            animationDuration={1000}
+            animationEasing="ease-out"
           />
         </ComposedChart>
       </ResponsiveContainer>
-    </div>
+    </motion.div>
   );
 };
