@@ -53,7 +53,7 @@ export const GlobalFilterBar: React.FC = () => {
 
         if (finalConfirm === 'DELETE') {
           try {
-            console.log('🗑️ Starting comprehensive data clearing...');
+
 
             // Clear all trades using the hook function (now async)
             await clearAllTrades();
@@ -74,9 +74,9 @@ export const GlobalFilterBar: React.FC = () => {
             keysToRemove.forEach(key => {
               try {
                 localStorage.removeItem(key);
-                console.log(`🗑️ Removed localStorage key: ${key}`);
+
               } catch (error) {
-                console.error(`❌ Failed to remove localStorage key ${key}:`, error);
+                console.error(`Failed to remove localStorage key ${key}:`, error);
               }
             });
 

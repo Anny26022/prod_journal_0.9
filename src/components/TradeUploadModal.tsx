@@ -133,6 +133,12 @@ const parseFlexibleNumber = (value: any): number => {
 
   let stringValue = String(value).trim();
 
+  // Handle Excel errors and special values
+  if (stringValue === '#DIV/0!' || stringValue === '#N/A' || stringValue === '#ERROR!' ||
+      stringValue === '#VALUE!' || stringValue === '#REF!' || stringValue === '#NAME?') {
+    return 0;
+  }
+
   // Quick check for simple numbers
   if (/^\d+\.?\d*$/.test(stringValue)) {
     return parseFloat(stringValue);
@@ -140,7 +146,8 @@ const parseFlexibleNumber = (value: any): number => {
 
   // Only do complex cleaning if needed
   stringValue = stringValue
-    .replace(/[₹$€£¥,\s]/g, '') // Remove currency symbols, commas, spaces
+    .replace(/[₹$€£¥,\s%]/g, '') // Remove currency symbols, commas, spaces, percentage
+    .replace(/["']/g, '') // Remove quotes
     .replace(/[^\d.-]/g, ''); // Keep only digits, dots, and minus signs
 
   // Handle decimal comma (European format)
@@ -202,7 +209,7 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
 }) => {
   // Upload functionality is now enabled
   const isUploadDisabled = false;
-  const [step, setStep] = useState<'upload' | 'mapping' | 'preview' | 'importing'>('upload');
+  const [step, setStep] = useState<'upload' | 'dateFormat' | 'mapping' | 'preview' | 'importing'>('upload');
   const [parsedData, setParsedData] = useState<ParsedData | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
   const [mappingConfidence, setMappingConfidence] = useState<MappingConfidence>({});
@@ -210,6 +217,286 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
   const [importProgress, setImportProgress] = useState(0);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDateFormat, setSelectedDateFormat] = useState<string>('auto');
+
+  // Date format options
+  const dateFormatOptions = [
+    { value: 'auto', label: 'Auto-detect (Recommended)', example: 'Various formats', description: 'Let the system automatically detect your date format' },
+    { value: 'iso', label: 'ISO Format', example: '2024-01-15', description: 'Year-Month-Day with dashes' },
+    { value: 'dmy_slash', label: 'DD/MM/YYYY', example: '15/01/2024', description: 'Day/Month/Year with slashes' },
+    { value: 'mdy_slash', label: 'MM/DD/YYYY', example: '01/15/2024', description: 'Month/Day/Year with slashes (US format)' },
+    { value: 'dmy_dash', label: 'DD-MM-YYYY', example: '15-01-2024', description: 'Day-Month-Year with dashes' },
+    { value: 'dmy_dot', label: 'DD.MM.YYYY', example: '15.01.2024', description: 'Day.Month.Year with dots' },
+    { value: 'dmy_text_full', label: 'DD MMM YYYY', example: '24 Jul 2024', description: 'Day Month Year with text month' },
+    { value: 'dmy_text_short', label: 'DD MMM YY', example: '24 Jul 24', description: 'Day Month Year (2-digit year) with text month' },
+    { value: 'dmy_text_no_year', label: 'DD MMM', example: '24 Jul', description: 'Day Month only (current year assumed)' },
+    { value: 'mdy_text_full', label: 'MMM DD, YYYY', example: 'Jul 24, 2024', description: 'Month Day, Year with text month (US format)' },
+    { value: 'mdy_text_short', label: 'MMM DD YY', example: 'Jul 24 24', description: 'Month Day Year (2-digit year) with text month' },
+  ];
+
+  // Month name mappings for text-based dates
+  const monthNames = {
+    'jan': 0, 'january': 0,
+    'feb': 1, 'february': 1,
+    'mar': 2, 'march': 2,
+    'apr': 3, 'april': 3,
+    'may': 4,
+    'jun': 5, 'june': 5,
+    'jul': 6, 'july': 6,
+    'aug': 7, 'august': 7,
+    'sep': 8, 'september': 8, 'sept': 8,
+    'oct': 9, 'october': 9,
+    'nov': 10, 'november': 10,
+    'dec': 11, 'december': 11
+  };
+
+  // Robust date parsing function to handle various date formats
+  const parseDate = useCallback((dateStr: string, formatHint?: string): string | null => {
+    if (!dateStr || typeof dateStr !== 'string') return null;
+
+    const cleanDateStr = String(dateStr).trim();
+    if (!cleanDateStr) return null;
+
+    const format = formatHint || selectedDateFormat;
+
+    // If user specified a specific format, try that first
+    if (format !== 'auto') {
+      try {
+        let parsedDate: Date;
+
+        switch (format) {
+          case 'iso': {
+            // YYYY-MM-DD
+            const parts = cleanDateStr.split(/[\/\-\.]/);
+            if (parts.length === 3) {
+              const [part1, part2, part3] = parts.map(p => parseInt(p, 10));
+              parsedDate = new Date(part1, part2 - 1, part3);
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'dmy_slash':
+          case 'dmy_dash':
+          case 'dmy_dot': {
+            // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
+            const parts = cleanDateStr.split(/[\/\-\.]/);
+            if (parts.length === 3) {
+              const [part1, part2, part3] = parts.map(p => parseInt(p, 10));
+              parsedDate = new Date(part3, part2 - 1, part1);
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'mdy_slash': {
+            // MM/DD/YYYY
+            const parts = cleanDateStr.split(/[\/\-\.]/);
+            if (parts.length === 3) {
+              const [part1, part2, part3] = parts.map(p => parseInt(p, 10));
+              parsedDate = new Date(part3, part1 - 1, part2);
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'dmy_text_full': {
+            // DD MMM YYYY (e.g., "24 Jul 2024")
+            const parts = cleanDateStr.split(/\s+/);
+            if (parts.length === 3) {
+              const day = parseInt(parts[0], 10);
+              const monthName = parts[1].toLowerCase();
+              const year = parseInt(parts[2], 10);
+              const month = monthNames[monthName as keyof typeof monthNames];
+              if (month !== undefined) {
+                parsedDate = new Date(year, month, day);
+              } else {
+                parsedDate = new Date(cleanDateStr);
+              }
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'dmy_text_short': {
+            // DD MMM YY (e.g., "24 Jul 24")
+            const parts = cleanDateStr.split(/\s+/);
+            if (parts.length === 3) {
+              const day = parseInt(parts[0], 10);
+              const monthName = parts[1].toLowerCase();
+              let year = parseInt(parts[2], 10);
+              // Convert 2-digit year to 4-digit (assume 2000s for 00-30, 1900s for 31-99)
+              if (year <= 30) year += 2000;
+              else if (year < 100) year += 1900;
+              const month = monthNames[monthName as keyof typeof monthNames];
+              if (month !== undefined) {
+                parsedDate = new Date(year, month, day);
+              } else {
+                parsedDate = new Date(cleanDateStr);
+              }
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'dmy_text_no_year': {
+            // DD MMM (e.g., "24 Jul") - assume current year
+            const parts = cleanDateStr.split(/\s+/);
+            if (parts.length === 2) {
+              const day = parseInt(parts[0], 10);
+              const monthName = parts[1].toLowerCase();
+              const year = new Date().getFullYear(); // Use current year
+              const month = monthNames[monthName as keyof typeof monthNames];
+              if (month !== undefined) {
+                parsedDate = new Date(year, month, day);
+              } else {
+                parsedDate = new Date(cleanDateStr);
+              }
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'mdy_text_full': {
+            // MMM DD, YYYY (e.g., "Jul 24, 2024")
+            const parts = cleanDateStr.replace(',', '').split(/\s+/);
+            if (parts.length === 3) {
+              const monthName = parts[0].toLowerCase();
+              const day = parseInt(parts[1], 10);
+              const year = parseInt(parts[2], 10);
+              const month = monthNames[monthName as keyof typeof monthNames];
+              if (month !== undefined) {
+                parsedDate = new Date(year, month, day);
+              } else {
+                parsedDate = new Date(cleanDateStr);
+              }
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          case 'mdy_text_short': {
+            // MMM DD YY (e.g., "Jul 24 24")
+            const parts = cleanDateStr.split(/\s+/);
+            if (parts.length === 3) {
+              const monthName = parts[0].toLowerCase();
+              const day = parseInt(parts[1], 10);
+              let year = parseInt(parts[2], 10);
+              // Convert 2-digit year to 4-digit
+              if (year <= 30) year += 2000;
+              else if (year < 100) year += 1900;
+              const month = monthNames[monthName as keyof typeof monthNames];
+              if (month !== undefined) {
+                parsedDate = new Date(year, month, day);
+              } else {
+                parsedDate = new Date(cleanDateStr);
+              }
+            } else {
+              parsedDate = new Date(cleanDateStr);
+            }
+            break;
+          }
+          default:
+            parsedDate = new Date(cleanDateStr);
+        }
+
+        if (!isNaN(parsedDate.getTime())) {
+          return parsedDate.toISOString().split('T')[0];
+        }
+      } catch (error) {
+        console.warn(`Failed to parse date "${cleanDateStr}" with format "${format}"`);
+      }
+    }
+
+    // Fallback to auto-detection if specific format fails or auto is selected
+    // Try parsing as-is first (for ISO dates)
+    let parsedDate = new Date(cleanDateStr);
+    if (!isNaN(parsedDate.getTime())) {
+      return parsedDate.toISOString().split('T')[0];
+    }
+
+    // Try text-based date formats first (more specific)
+    const textParts = cleanDateStr.split(/\s+/);
+    if (textParts.length >= 2) {
+      const firstPart = textParts[0];
+      const secondPart = textParts[1];
+
+      // Check if second part looks like a month name
+      const monthName = secondPart.toLowerCase();
+      if (monthNames[monthName as keyof typeof monthNames] !== undefined) {
+        const month = monthNames[monthName as keyof typeof monthNames];
+        const day = parseInt(firstPart, 10);
+
+        if (textParts.length === 3) {
+          // DD MMM YYYY or DD MMM YY
+          let year = parseInt(textParts[2], 10);
+          if (year <= 30) year += 2000;
+          else if (year < 100) year += 1900;
+
+          parsedDate = new Date(year, month, day);
+          if (!isNaN(parsedDate.getTime())) {
+            return parsedDate.toISOString().split('T')[0];
+          }
+        } else if (textParts.length === 2) {
+          // DD MMM (assume current year)
+          const year = new Date().getFullYear();
+          parsedDate = new Date(year, month, day);
+          if (!isNaN(parsedDate.getTime())) {
+            return parsedDate.toISOString().split('T')[0];
+          }
+        }
+      }
+
+      // Check if first part looks like a month name (US format)
+      const firstMonthName = firstPart.toLowerCase();
+      if (monthNames[firstMonthName as keyof typeof monthNames] !== undefined) {
+        const month = monthNames[firstMonthName as keyof typeof monthNames];
+        const day = parseInt(secondPart.replace(',', ''), 10);
+
+        if (textParts.length === 3) {
+          // MMM DD, YYYY or MMM DD YY
+          let year = parseInt(textParts[2], 10);
+          if (year <= 30) year += 2000;
+          else if (year < 100) year += 1900;
+
+          parsedDate = new Date(year, month, day);
+          if (!isNaN(parsedDate.getTime())) {
+            return parsedDate.toISOString().split('T')[0];
+          }
+        }
+      }
+    }
+
+    // Try numeric date formats
+    const parts = cleanDateStr.split(/[\/\-\.]/);
+    if (parts.length === 3) {
+      const [part1, part2, part3] = parts.map(p => parseInt(p, 10));
+
+      // If year is clearly identifiable (4 digits)
+      if (part3 > 1900) {
+        // DD/MM/YYYY format (try first - more common internationally)
+        parsedDate = new Date(part3, part2 - 1, part1);
+        if (!isNaN(parsedDate.getTime()) && part1 <= 31 && part2 <= 12) {
+          return parsedDate.toISOString().split('T')[0];
+        }
+
+        // MM/DD/YYYY format (US format)
+        parsedDate = new Date(part3, part1 - 1, part2);
+        if (!isNaN(parsedDate.getTime()) && part2 <= 31 && part1 <= 12) {
+          return parsedDate.toISOString().split('T')[0];
+        }
+      } else if (part1 > 1900) {
+        // YYYY/MM/DD format
+        parsedDate = new Date(part1, part2 - 1, part3);
+        if (!isNaN(parsedDate.getTime()) && part3 <= 31 && part2 <= 12) {
+          return parsedDate.toISOString().split('T')[0];
+        }
+      }
+    }
+
+    console.warn(`Failed to parse date: "${cleanDateStr}"`);
+    return null;
+  }, [selectedDateFormat]);
 
   // Function to recalculate all auto-populated fields for a trade
   // NOTE: CMP will be auto-fetched from API when trade name is set, not imported from CSV
@@ -326,10 +613,30 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     };
   }, [portfolioSize, getPortfolioSize]);
 
-  // Smart column mapping based on header similarity
+  // Smart column mapping based on header similarity AND data content validation
   const generateSmartMapping = useCallback((headers: string[]): { mapping: ColumnMapping; confidence: MappingConfidence } => {
     const mapping: ColumnMapping = {};
     const confidence: MappingConfidence = {};
+
+    // Helper function to check if a column has meaningful data
+    const hasValidData = (columnIndex: number): boolean => {
+      if (!parsedData || columnIndex >= headers.length) return false;
+
+      // Check first 10 rows to see if column has any non-empty, meaningful data
+      const sampleRows = parsedData.rows.slice(0, 10);
+      let nonEmptyCount = 0;
+
+      for (const row of sampleRows) {
+        const value = row[columnIndex];
+        if (value !== null && value !== undefined && String(value).trim() !== '' &&
+            String(value).trim() !== '#DIV/0!' && String(value).trim() !== '#N/A') {
+          nonEmptyCount++;
+        }
+      }
+
+      // Column should have data in at least 30% of sample rows to be considered valid
+      return nonEmptyCount >= Math.max(1, Math.ceil(sampleRows.length * 0.3));
+    };
 
     // Enhanced similarity mapping - ONLY for user input fields (auto-populated fields excluded)
     // Special handling for ambiguous "Date" columns by considering context
@@ -337,13 +644,13 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
       'tradeNo': ['trade no', 'trade number', 'trade id', 'id', 'sr no', 'serial', 'trade #', '#', 'trade no.'],
       'date': ['date', 'entry date', 'trade date', 'timestamp', 'entry dt', 'dt'],
       'name': ['name', 'stock', 'symbol', 'stock name', 'company', 'scrip', 'ticker', 'instrument'],
-      'setup': ['setup', 'strategy', 'pattern', 'type', 'trade type', 'setup type'],
+      'setup': ['setup', 'strategy', 'pattern', 'setup type', 'trade setup', 'setup name'],
       'buySell': ['buy/sell', 'buysell', 'side', 'action', 'transaction type', 'buy sell', 'direction', 'buy/ sell'],
       'entry': ['entry', 'entry price', 'buy price', 'price', 'entry rate', 'buy rate'],
       'sl': ['sl', 'stop loss', 'stoploss', 'stop', 'sl price', 'stop price'],
       'tsl': ['tsl', 'trailing sl', 'trailing stop', 'trail sl', 'trailing stop loss'],
-      'initialQty': ['qty', 'quantity', 'initial qty', 'shares', 'units', 'volume', 'size', 'initial\nqty'],
-      'pyramid1Price': ['pyramid 1 price', 'p1 price', 'p-1 price', 'pyramid1 price', 'pyr1 price', 'pyramid-1\nprice', 'pyramid-1 price'],
+      'initialQty': ['qty', 'quantity', 'initial qty', 'shares', 'units', 'volume', 'size', 'initial qty', 'base qty'],
+      'pyramid1Price': ['pyramid 1 price', 'p1 price', 'p-1 price', 'pyramid1 price', 'pyr1 price', 'pyramid-1 price', 'pyramid-1 price'],
       'pyramid1Qty': ['pyramid 1 qty', 'p1 qty', 'p-1 qty', 'pyramid1 qty', 'pyr1 qty', 'p-1\nqty'],
       'pyramid1Date': ['pyramid 1 date', 'p1 date', 'p-1 date', 'pyramid1 date', 'pyr1 date', 'p-1\ndate'],
       'pyramid2Price': ['pyramid 2 price', 'p2 price', 'p-2 price', 'pyramid2 price', 'pyr2 price', 'pyramid-2\nprice', 'pyramid-2 price'],
@@ -471,12 +778,17 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
       let bestMatch = '';
       let bestScore = 0;
 
-      headers.forEach(header => {
+      headers.forEach((header, headerIndex) => {
         keywords.forEach(keyword => {
           const score = calculateSimilarity(header, keyword);
-          if (score > bestScore && score >= 60) { // Minimum threshold of 60%
-            bestScore = score;
-            bestMatch = header;
+          if (score > bestScore && score >= 80) { // Increased threshold to 80% for automatic mapping
+            // Additional validation: check if this column actually has data
+            if (hasValidData(headerIndex)) {
+              bestScore = score;
+              bestMatch = header;
+            } else {
+              console.log(`⚠️ Skipping mapping for "${field}" -> "${header}" - column appears to be empty`);
+            }
           }
         });
       });
@@ -484,11 +796,12 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
       if (bestMatch && !Object.values(mapping).includes(bestMatch)) {
         mapping[field] = bestMatch;
         confidence[field] = bestScore;
+        console.log(`✅ Mapped "${field}" -> "${bestMatch}" (confidence: ${bestScore}%)`);
       }
     });
 
     return { mapping, confidence };
-  }, []);
+  }, [parsedData]);
 
   const handleFileUpload = useCallback((file: File) => {
     setError(null); // Clear any previous errors
@@ -507,7 +820,14 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
               const rows = results.data.slice(1) as any[][];
 
               // Filter out completely empty rows and clean headers
-              const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
+              const cleanHeaders = headers
+                .filter(h => h && String(h).trim() !== '')
+                .map(h => String(h)
+                  .replace(/\n/g, ' ') // Replace newlines with spaces
+                  .replace(/\r/g, ' ') // Replace carriage returns with spaces
+                  .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                  .trim()
+                );
               const cleanRows = rows.filter(row => {
                 // Keep row if it has at least one non-empty, non-whitespace cell
                 return row.some(cell =>
@@ -539,7 +859,15 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
               const smartMapping = generateSmartMapping(cleanHeaders);
               setColumnMapping(smartMapping.mapping);
               setMappingConfidence(smartMapping.confidence);
-              setStep('mapping');
+
+              // Check if there are any date columns mapped
+              const hasDateColumns = Object.keys(smartMapping.mapping).some(key => key.includes('Date') || key === 'date');
+
+              if (hasDateColumns) {
+                setStep('dateFormat');
+              } else {
+                setStep('mapping');
+              }
             } else {
               setError('The CSV file appears to be empty or invalid. Please check your file.');
             }
@@ -579,7 +907,14 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             const rows = jsonData.slice(1);
 
             // Filter out completely empty rows and clean headers
-            const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
+            const cleanHeaders = headers
+              .filter(h => h && String(h).trim() !== '')
+              .map(h => String(h)
+                .replace(/\n/g, ' ') // Replace newlines with spaces
+                .replace(/\r/g, ' ') // Replace carriage returns with spaces
+                .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+                .trim()
+              );
             const cleanRows = rows.filter(row => {
               // Keep row if it has at least one non-empty, non-whitespace cell
               return row.some(cell =>
@@ -601,7 +936,15 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             const smartMapping = generateSmartMapping(cleanHeaders);
             setColumnMapping(smartMapping.mapping);
             setMappingConfidence(smartMapping.confidence);
-            setStep('mapping');
+
+            // Check if there are any date columns mapped
+            const hasDateColumns = Object.keys(smartMapping.mapping).some(key => key.includes('Date') || key === 'date');
+
+            if (hasDateColumns) {
+              setStep('dateFormat');
+            } else {
+              setStep('mapping');
+            }
           }
         } catch (error) {
           console.error('Error parsing Excel file:', error);
@@ -744,8 +1087,17 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             trade[field as keyof Trade] = boolValue === 'true' || boolValue === 'yes' || boolValue === '1';
           } else if (field.includes('Date') && value) {
             // Enhanced date parsing with multiple format support
-            const parsedDate = parseFlexibleDate(value);
-            trade[field as keyof Trade] = parsedDate || value;
+            const parsedDate = parseDate(value);
+            trade[field as keyof Trade] = parsedDate || new Date().toISOString().split('T')[0];
+          } else if (field === 'setup') {
+            // Special handling for setup field - reject numeric values
+            const setupValue = String(value || '').trim();
+            // If the value looks like a number (price), don't use it for setup
+            if (setupValue && !(/^\d+\.?\d*$/.test(setupValue))) {
+              trade[field as keyof Trade] = setupValue;
+            } else {
+              trade[field as keyof Trade] = ''; // Leave empty if it's a numeric value
+            }
           } else {
             trade[field as keyof Trade] = String(value || '');
           }
@@ -770,11 +1122,13 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
 
     setStep('importing');
     setImportProgress(0);
+    setError(null);
 
     const trades: Trade[] = [];
     const totalRows = parsedData.rows.length;
     let validTradeCount = 0;
     let skippedBlankTrades = 0;
+    let dateParsingErrors: string[] = [];
 
     // Process in larger chunks for better performance
     const CHUNK_SIZE = 50; // Process 50 trades at a time
@@ -877,8 +1231,20 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             trade[field as keyof Trade] = boolValue === 'true' || boolValue === 'yes' || boolValue === '1';
           } else if (field.includes('Date') && value) {
             // Enhanced date parsing with multiple format support
-            const parsedDate = parseFlexibleDate(value);
-            trade[field as keyof Trade] = parsedDate || value;
+            const parsedDate = parseDate(value);
+            if (!parsedDate && value) {
+              dateParsingErrors.push(`Row ${validTradeCount + skippedBlankTrades + 1}: Invalid date "${value}" in ${field}`);
+            }
+            trade[field as keyof Trade] = parsedDate || new Date().toISOString().split('T')[0];
+          } else if (field === 'setup') {
+            // Special handling for setup field - reject numeric values
+            const setupValue = String(value || '').trim();
+            // If the value looks like a number (price), don't use it for setup
+            if (setupValue && !(/^\d+\.?\d*$/.test(setupValue))) {
+              trade[field as keyof Trade] = setupValue;
+            } else {
+              trade[field as keyof Trade] = ''; // Leave empty if it's a numeric value
+            }
           } else {
             trade[field as keyof Trade] = String(value || '');
           }
@@ -918,6 +1284,16 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
 
     console.log(`✅ Import completed: ${trades.length} valid trades imported, ${skippedBlankTrades} blank rows skipped`);
 
+    // Show date parsing warnings if any
+    if (dateParsingErrors.length > 0) {
+      console.warn('Date parsing issues found:', dateParsingErrors);
+      const errorMessage = `Import completed with ${dateParsingErrors.length} date parsing warnings. Some dates may have been set to today's date. Check the imported trades and update dates as needed.`;
+      setError(errorMessage);
+
+      // Still proceed with import but show warning
+      setTimeout(() => setError(null), 5000); // Clear error after 5 seconds
+    }
+
     // Import trades
     onImport(trades);
 
@@ -948,6 +1324,7 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     setPreviewTrades([]);
     setImportProgress(0);
     setError(null);
+    setSelectedDateFormat('auto');
   }, []);
 
 
@@ -1110,26 +1487,28 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
               
               {/* Progress indicator */}
               <div className="flex items-center gap-2 mt-4">
-                {['upload', 'mapping', 'preview', 'importing'].map((stepName, index) => (
+                {['upload', 'dateFormat', 'mapping', 'preview', 'importing'].map((stepName, index) => (
                   <React.Fragment key={stepName}>
                     <div className={`flex items-center gap-2 ${
-                      step === stepName ? 'text-primary' : 
-                      ['upload', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'text-success' : 'text-foreground-400'
+                      step === stepName ? 'text-primary' :
+                      ['upload', 'dateFormat', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'text-success' : 'text-foreground-400'
                     }`}>
                       <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
                         step === stepName ? 'bg-primary text-white' :
-                        ['upload', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'bg-success text-white' : 'bg-default-200'
+                        ['upload', 'dateFormat', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'bg-success text-white' : 'bg-default-200'
                       }`}>
-                        {['upload', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 
-                          <Icon icon="lucide:check" className="w-3 h-3" /> : 
+                        {['upload', 'dateFormat', 'mapping', 'preview', 'importing'].indexOf(step) > index ?
+                          <Icon icon="lucide:check" className="w-3 h-3" /> :
                           index + 1
                         }
                       </div>
-                      <span className="text-xs font-medium capitalize">{stepName}</span>
+                      <span className="text-xs font-medium capitalize">
+                        {stepName === 'dateFormat' ? 'Date Format' : stepName}
+                      </span>
                     </div>
-                    {index < 3 && (
+                    {index < 4 && (
                       <div className={`w-8 h-0.5 ${
-                        ['upload', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'bg-success' : 'bg-default-200'
+                        ['upload', 'dateFormat', 'mapping', 'preview', 'importing'].indexOf(step) > index ? 'bg-success' : 'bg-default-200'
                       }`} />
                     )}
                   </React.Fragment>
@@ -1235,11 +1614,15 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
                               color="primary"
                               startContent={<Icon icon="lucide:download" />}
                               onPress={() => {
-                                // Create sample CSV content
-                                const sampleCSV = `Name,Date,Entry,Quantity,Buy/Sell,Status,Exit Price,Exit Quantity,Setup,Notes
-RELIANCE,2024-01-15,2500,10,Buy,Closed,2650,10,Breakout,Good momentum trade
-TCS,2024-01-16,3200,5,Buy,Open,,,Support,Waiting for breakout
-INFY,2024-01-17,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken`;
+                                // Create sample CSV content with multiple date formats
+                                const sampleCSV = `Name,Date,Entry,Quantity,Buy/Sell,Status,Exit Price,Exit Quantity,Setup,Notes,Pyramid Date
+RELIANCE,2024-01-15,2500,10,Buy,Closed,2650,10,Breakout,Good momentum trade,
+TCS,15/01/2024,3200,5,Buy,Open,,,Support,Waiting for breakout,
+INFY,17-01-2024,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken,
+HDFC,15.01.2024,1800,8,Buy,Closed,1950,8,Reversal,Target achieved,
+WIPRO,24 Jul 24,1200,12,Buy,Open,,,Breakout,Text date format,25 Jul
+BHARTI,15 Aug 2024,850,20,Buy,Closed,920,20,Support,Full text date,
+MARUTI,12 Sep,2800,3,Buy,Open,,,Pullback,Current year assumed,`;
 
                                 // Create and download file
                                 const blob = new Blob([sampleCSV], { type: 'text/csv' });
@@ -1259,7 +1642,118 @@ INFY,2024-01-17,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken`;
                           <div className="bg-default-100 p-3 rounded-lg text-xs font-mono">
                             <div>Name,Date,Entry,Quantity,Buy/Sell,Status</div>
                             <div>RELIANCE,2024-01-15,2500,10,Buy,Closed</div>
-                            <div>TCS,2024-01-16,3200,5,Buy,Open</div>
+                            <div>TCS,15/01/2024,3200,5,Buy,Open</div>
+                            <div>INFY,17-01-2024,1450,15,Buy,Partial</div>
+                          </div>
+
+                          <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                            <h5 className="font-medium text-blue-800 dark:text-blue-200 mb-2 flex items-center gap-2">
+                              <Icon icon="lucide:calendar" className="w-4 h-4" />
+                              Supported Date Formats
+                            </h5>
+                            <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
+                              <div>• <strong>Numeric:</strong> 2024-01-15, 15/01/2024, 15-01-2024, 15.01.2024</div>
+                              <div>• <strong>Text Month:</strong> 24 Jul 2024, 24 Jul 24, 24 Jul</div>
+                              <div>• <strong>US Format:</strong> Jul 24, 2024, Jul 24 24</div>
+                              <div>• <strong>Mixed:</strong> Any combination of the above</div>
+                              <div className="text-blue-600 dark:text-blue-400 mt-2">
+                                <Icon icon="lucide:info" className="w-3 h-3 inline mr-1" />
+                                The system will automatically detect and convert your date format
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </CardBody>
+                    </Card>
+                  </motion.div>
+                )}
+
+                {step === 'dateFormat' && parsedData && (
+                  <motion.div
+                    key="dateFormat"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    className="space-y-6"
+                  >
+                    <Card>
+                      <CardHeader>
+                        <div className="flex items-center gap-2">
+                          <Icon icon="lucide:calendar" className="text-primary" />
+                          <span className="font-medium">Select Date Format</span>
+                        </div>
+                      </CardHeader>
+                      <CardBody>
+                        <div className="space-y-4">
+                          <p className="text-sm text-foreground-500">
+                            We detected date columns in your file. Please select the format your dates are in to ensure accurate parsing.
+                          </p>
+
+                          {/* Show sample dates from the file */}
+                          {parsedData.rows.length > 0 && (
+                            <div className="p-3 bg-default-50 rounded-lg">
+                              <h4 className="font-medium text-sm mb-2">Sample dates from your file:</h4>
+                              <div className="text-xs text-foreground-600 space-y-1">
+                                {parsedData.rows.slice(0, 3).map((row, index) => {
+                                  // Find date columns and show sample values
+                                  const dateColumns = Object.entries(columnMapping).filter(([key]) => key.includes('Date') || key === 'date');
+                                  return dateColumns.map(([field, column]) => {
+                                    const columnIndex = parsedData.headers.indexOf(column);
+                                    const value = columnIndex !== -1 ? row[columnIndex] : '';
+                                    return value ? (
+                                      <div key={`${index}-${field}`} className="font-mono">
+                                        {field}: <span className="text-primary">{value}</span>
+                                      </div>
+                                    ) : null;
+                                  });
+                                }).flat().filter(Boolean).slice(0, 5)}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Date format selection */}
+                          <div className="space-y-3">
+                            {dateFormatOptions.map((option) => (
+                              <div
+                                key={option.value}
+                                className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                                  selectedDateFormat === option.value
+                                    ? 'border-primary bg-primary/5'
+                                    : 'border-default-200 hover:border-default-300'
+                                }`}
+                                onClick={() => setSelectedDateFormat(option.value)}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                                    selectedDateFormat === option.value
+                                      ? 'border-primary bg-primary'
+                                      : 'border-default-300'
+                                  }`}>
+                                    {selectedDateFormat === option.value && (
+                                      <div className="w-2 h-2 rounded-full bg-white"></div>
+                                    )}
+                                  </div>
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="font-medium">{option.label}</span>
+                                      <code className="text-xs bg-default-100 px-2 py-1 rounded">
+                                        {option.example}
+                                      </code>
+                                    </div>
+                                    <p className="text-xs text-foreground-500">{option.description}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                            <div className="flex items-start gap-2">
+                              <Icon icon="lucide:lightbulb" className="w-4 h-4 text-blue-600 mt-0.5" />
+                              <div className="text-xs text-blue-700 dark:text-blue-300">
+                                <strong>Tip:</strong> If you're unsure, choose "Auto-detect" and we'll try to figure out your date format automatically. You can always re-import if needed.
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </CardBody>
@@ -1548,7 +2042,8 @@ INFY,2024-01-17,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken`;
                     <Button
                       variant="light"
                       onPress={() => {
-                        if (step === 'mapping') setStep('upload');
+                        if (step === 'dateFormat') setStep('upload');
+                        else if (step === 'mapping') setStep('dateFormat');
                         else if (step === 'preview') setStep('mapping');
                       }}
                       startContent={<Icon icon="lucide:arrow-left" />}
@@ -1562,6 +2057,16 @@ INFY,2024-01-17,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken`;
                   <Button variant="light" onPress={onClose} isDisabled={step === 'importing'}>
                     Cancel
                   </Button>
+
+                  {step === 'dateFormat' && (
+                    <Button
+                      color="primary"
+                      onPress={() => setStep('mapping')}
+                      endContent={<Icon icon="lucide:arrow-right" />}
+                    >
+                      Continue to Mapping
+                    </Button>
+                  )}
 
                   {step === 'mapping' && (
                     <Button

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Table,
   TableHeader,
@@ -185,7 +186,7 @@ export const TradeJournal = React.memo(function TradeJournal({
         const entries = list.getEntries();
         entries.forEach(entry => {
           if (entry.duration > 100) { // Log operations taking more than 100ms
-            console.warn(`🐌 Slow operation: ${entry.name} took ${entry.duration.toFixed(2)}ms`);
+
           }
         });
       });
@@ -194,7 +195,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       // Measure component render time
       const endTime = performance.now();
       if (endTime - startTime > 50) {
-        console.warn(`🐌 Slow render: TradeJournal took ${(endTime - startTime).toFixed(2)}ms`);
+
       }
 
       return () => observer.disconnect();
@@ -1512,6 +1513,8 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
+
+
     // Trade details tooltip for stock name (precomputed)
     if (columnKey === 'name') {
       const tooltipData = precomputedTooltips.get(trade.id)?.tradeDetails;
@@ -1755,6 +1758,21 @@ export const TradeJournal = React.memo(function TradeJournal({
       );
     }
 
+    // Special handling for openHeat BEFORE non-editable check
+    if (columnKey === "openHeat") {
+      // Only show open heat for open/partial positions
+      if (trade.positionStatus === 'Open' || trade.positionStatus === 'Partial') {
+        const openHeatValue = calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize);
+        return (
+          <div className="py-1 px-2 text-right whitespace-nowrap">
+            {openHeatValue.toFixed(2)}%
+          </div>
+        );
+      } else {
+        return <div className="py-1 px-2 text-right whitespace-nowrap">-</div>;
+      }
+    }
+
     // Skip rendering for non-editable fields
     if (!isEditable(columnKey)) {
       return (
@@ -1943,7 +1961,6 @@ export const TradeJournal = React.memo(function TradeJournal({
       // Non-editable calculated percentage fields
       case "allocation":
       case "stockMove":
-      case "openHeat":
         return (
           <div className="py-1 px-2 text-right whitespace-nowrap">
             {formatCellValue(cellValue, columnKey)}
@@ -2007,12 +2024,7 @@ export const TradeJournal = React.memo(function TradeJournal({
         } else {
           return <div className="py-1 px-2 text-right whitespace-nowrap">-</div>;
         }
-      case 'openHeat':
-        return (
-          <div className="py-1 px-2 text-right whitespace-nowrap">
-            {calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize).toFixed(2)}%
-          </div>
-        );
+
       case 'notes':
         return (
           <NotesCell
@@ -2120,7 +2132,7 @@ export const TradeJournal = React.memo(function TradeJournal({
 
     // Debug: Compare final sums and do a manual calculation (ALWAYS LOG)
     if (process.env.NODE_ENV === 'development') {
-      console.log(`💰 [Final Sum] useCashBasis=${useCashBasis}, realizedPL=₹${realizedPL.toFixed(2)}, debugSum=₹${debugSum.toFixed(2)}, trades=${realizedTrades.length}`);
+
 
       if (useCashBasis) {
         // Manual calculation to verify
@@ -2129,11 +2141,7 @@ export const TradeJournal = React.memo(function TradeJournal({
           return sum + pl;
         }, 0);
 
-        console.log(`💰 [Manual Check] manualSum=₹${manualSum.toFixed(2)}`);
 
-        if (Math.abs(realizedPL - manualSum) > 0.01) {
-          console.log(`⚠️ [Sum Mismatch] realizedPL ≠ manualSum! Difference: ₹${(realizedPL - manualSum).toFixed(2)}`);
-        }
       }
     }
 
@@ -2329,8 +2337,25 @@ export const TradeJournal = React.memo(function TradeJournal({
 
   return (
     <div className="space-y-4">
+      {/* Work in Progress Banner */}
+      <Card className="border-warning/50 bg-warning/5">
+        <CardBody className="p-3">
+          <div className="flex items-center gap-3">
+            <Icon icon="lucide:construction" className="text-warning w-5 h-5 flex-shrink-0" />
+            <div className="flex-1">
+              <h3 className="text-sm font-medium text-warning-700 dark:text-warning-300">
+                CSV Import Feature Under Development
+              </h3>
+              <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
+                We're working on improving the CSV import functionality. Manual trade entry is fully functional.
+              </p>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
       {/* Custom CSS for sticky name column */}
-      <style jsx>{`
+      <style>{`
         .sticky-name-header {
           position: sticky !important;
           left: 0 !important;
@@ -2353,7 +2378,6 @@ export const TradeJournal = React.memo(function TradeJournal({
         .dark .sticky-name-cell {
           background: rgb(17 24 39) !important; /* dark:bg-gray-900 */
         }
-
       `}</style>
 
       <div className="flex flex-col gap-4 mb-6">
@@ -2415,7 +2439,7 @@ export const TradeJournal = React.memo(function TradeJournal({
                   onPress={() => {
                     setSearchQuery('');
                     setStatusFilter('');
-                    console.log('🔄 Cleared all filters');
+
                   }}
                   startContent={<Icon icon="lucide:x" />}
                 >
@@ -2496,15 +2520,15 @@ export const TradeJournal = React.memo(function TradeJournal({
                 <Icon icon="lucide:plus" className="text-base" />
               </Button>
             </motion.div>
-            <MobileTooltip content="Import trades from Excel/CSV files" placement="top">
+            <MobileTooltip content="CSV Import - Work in Progress" placement="top">
               <Button
                 isIconOnly
                 variant="light"
                 size="sm"
-                className="rounded-md p-1 hover:bg-primary/10 transition"
-                onPress={onUploadOpen}
+                className="rounded-md p-1 opacity-50 cursor-not-allowed"
+                isDisabled={true}
               >
-                <Icon icon="lucide:upload" className="text-base text-primary" />
+                <Icon icon="lucide:construction" className="text-base text-warning" />
               </Button>
             </MobileTooltip>
             <Dropdown>
@@ -3991,6 +4015,54 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
     }
   }, [selectedIndex]);
 
+  // Update dropdown position on scroll/resize to prevent clipping
+  React.useEffect(() => {
+    if (!showDropdown || !inputRef.current || !dropdownRef.current) return;
+
+    const updatePosition = () => {
+      if (inputRef.current && dropdownRef.current) {
+        const rect = inputRef.current.getBoundingClientRect();
+        const dropdown = dropdownRef.current;
+
+        dropdown.style.top = `${rect.bottom + 2}px`;
+        dropdown.style.left = `${rect.left}px`;
+        dropdown.style.width = `${Math.max(220, rect.width)}px`;
+      }
+    };
+
+    // Update position immediately
+    updatePosition();
+
+    // Update position on scroll and resize
+    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', updatePosition);
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [showDropdown]);
+
+  // Handle click outside to close dropdown
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        inputRef.current &&
+        !inputRef.current.contains(event.target as Node)
+      ) {
+        setShowDropdown(false);
+        setIsEditing(false);
+      }
+    };
+
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showDropdown]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!showDropdown || filtered.length === 0) {
       // Allow normal typing when dropdown is not shown
@@ -4096,10 +4168,15 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
           onKeyDown={handleKeyDown}
           autoFocus
         />
-        {showDropdown && (
+        {showDropdown && createPortal(
           <div
             ref={dropdownRef}
-            className="absolute z-50 left-0 right-0 min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow max-h-48 overflow-y-auto overflow-x-auto mt-1"
+            className="fixed z-[99999] min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg max-h-48 overflow-y-auto overflow-x-auto"
+            style={{
+              top: inputRef.current ? inputRef.current.getBoundingClientRect().bottom + 2 : 0,
+              left: inputRef.current ? inputRef.current.getBoundingClientRect().left : 0,
+              width: inputRef.current ? Math.max(220, inputRef.current.getBoundingClientRect().width) : 220,
+            }}
             role="listbox"
             tabIndex={-1}
             onMouseDown={(e) => {
@@ -4132,7 +4209,8 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
                 {name}
               </div>
             ))}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
     );

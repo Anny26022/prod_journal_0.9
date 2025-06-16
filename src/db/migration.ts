@@ -422,14 +422,14 @@ export class MigrationService {
       allKeysToRemove.forEach(key => {
         if (localStorage.getItem(key)) {
           localStorage.removeItem(key);
-          console.log(`🧹 Removed localStorage key: ${key}`);
+
         }
       });
 
-      console.log('✅ localStorage cleanup completed');
+
       return true;
     } catch (error) {
-      console.error('❌ Failed to cleanup localStorage:', error);
+      console.error('Failed to cleanup localStorage:', error);
       return false;
     }
   }

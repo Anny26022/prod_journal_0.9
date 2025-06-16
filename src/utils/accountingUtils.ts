@@ -129,10 +129,7 @@ export function calculateTradePL(trade: Trade, useCashBasis: boolean = false): n
           ? (correctExitPrice - avgEntry) * cashBasisExit.qty
           : (avgEntry - correctExitPrice) * cashBasisExit.qty;
 
-        // Debug logging for cash basis P/L calculation
-        if (process.env.NODE_ENV === 'development' && Math.abs(pl) > 100) {
-          console.log(`🔍 [Cash P/L] ${trade.name}: entry=${avgEntry}, exit=${correctExitPrice}, qty=${cashBasisExit.qty}, pl=₹${pl.toFixed(2)}`);
-        }
+
 
         return pl;
       }

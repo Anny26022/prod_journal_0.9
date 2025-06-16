@@ -270,12 +270,10 @@ export function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize)
   const tradeDate = new Date(trade.date);
   const month = tradeDate.toLocaleString('default', { month: 'short' });
   const year = tradeDate.getFullYear();
-  
+
   // Get the portfolio size for the specific month/year of the trade
   const monthlyPortfolioSize = getPortfolioSize ? getPortfolioSize(month, year) : undefined;
   const effectivePortfolioSize = monthlyPortfolioSize !== undefined ? monthlyPortfolioSize : defaultPortfolioSize;
-
-
 
   const entryPrice = trade.avgEntry || trade.entry || 0;
   const sl = trade.sl || 0;
@@ -291,13 +289,29 @@ export function calcTradeOpenHeat(trade, defaultPortfolioSize, getPortfolioSize)
   } else {
     stop = 0; // Neither entered
   }
+
+
+
   if (!entryPrice || !stop || !qty) {
     return 0;
   }
-  if (stop >= entryPrice) {
-     return 0;
+
+  // For Buy trades, stop should be below entry price
+  // For Sell trades, stop should be above entry price
+  const buySell = trade.buySell || 'Buy';
+  let risk = 0;
+
+  if (buySell === 'Buy') {
+    if (stop >= entryPrice) {
+      return 0; // Invalid: stop loss should be below entry for Buy trades
+    }
+    risk = (entryPrice - stop) * qty;
+  } else {
+    if (stop <= entryPrice) {
+      return 0; // Invalid: stop loss should be above entry for Sell trades
+    }
+    risk = (stop - entryPrice) * qty;
   }
-  const risk = (entryPrice - stop) * qty;
 
   const heat = effectivePortfolioSize > 0 ? (Math.max(0, risk) / effectivePortfolioSize) * 100 : 0;
   return heat;

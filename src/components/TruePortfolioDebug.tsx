@@ -13,12 +13,12 @@ export const TruePortfolioDebug: React.FC = () => {
   } = useTruePortfolio();
 
   const handleTestSetup = () => {
-    console.log('🧪 Testing setup...');
+
     setYearlyStartingCapital(2024, 100000);
   };
 
   const handleTestCapitalChange = () => {
-    console.log('🧪 Testing capital change...');
+
     addCapitalChange({
       amount: 10000,
       type: 'deposit',

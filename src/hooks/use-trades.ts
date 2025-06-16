@@ -524,15 +524,15 @@ export const useTrades = () => {
         const limitMB = memInfo.jsHeapSizeLimit / 1024 / 1024;
 
         if (usedMB > limitMB * 0.8) { // If using more than 80% of available memory
-          console.warn(`⚠️ High memory usage detected: ${usedMB.toFixed(2)}MB / ${limitMB.toFixed(2)}MB`);
+
 
           // Force garbage collection if available
           if (window.gc) {
             try {
               window.gc();
-              console.log('🗑️ Forced garbage collection due to high memory usage');
+
             } catch (error) {
-              console.log('⚠️ Garbage collection not available');
+
             }
           }
         }
@@ -652,9 +652,31 @@ export const useTrades = () => {
     setTrades(prev => {
       console.log(`➕ [addTrade] Current trades count: ${prev.length}`);
 
+      // Add new trade to the array
+      const combinedTrades = [...prev, trade];
+
+      // Sort all trades by date to ensure proper chronological order (with safe date parsing)
+      combinedTrades.sort((a, b) => {
+        const dateA = new Date(a.date);
+        const dateB = new Date(b.date);
+
+        // Handle invalid dates by putting them at the end
+        if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
+
+        return dateA.getTime() - dateB.getTime();
+      });
+
+      // Reassign sequential trade numbers based on chronological order
+      combinedTrades.forEach((t, index) => {
+        t.tradeNo = String(index + 1);
+      });
+
+      console.log(`📅 Sorted ${combinedTrades.length} trades chronologically and reassigned trade numbers`);
+
       // Use the memoized recalculation helper
-      // Add new trade at the END of the array so it appears at the bottom
-      const newTrades = recalculateTradesWithCurrentPortfolio([...prev, trade]);
+      const newTrades = recalculateTradesWithCurrentPortfolio(combinedTrades);
       console.log(`➕ [addTrade] After adding and recalculating: ${newTrades.length} trades`);
 
       // Persist to IndexedDB asynchronously
@@ -803,6 +825,26 @@ export const useTrades = () => {
     setTrades(prev => {
       // Combine existing trades with imported trades
       const combinedTrades = [...importedTrades, ...prev];
+
+      // Sort all trades by date to ensure proper chronological order (with safe date parsing)
+      combinedTrades.sort((a, b) => {
+        const dateA = new Date(a.date);
+        const dateB = new Date(b.date);
+
+        // Handle invalid dates by putting them at the end
+        if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
+        if (isNaN(dateA.getTime())) return 1;
+        if (isNaN(dateB.getTime())) return -1;
+
+        return dateA.getTime() - dateB.getTime();
+      });
+
+      // Reassign sequential trade numbers based on chronological order
+      combinedTrades.forEach((trade, index) => {
+        trade.tradeNo = String(index + 1);
+      });
+
+      console.log(`📅 Sorted ${combinedTrades.length} trades chronologically and reassigned trade numbers`);
 
       // First pass: Skip expensive calculations for faster import
       const quickProcessedTrades = recalculateTradesWithCurrentPortfolio(combinedTrades, true);
