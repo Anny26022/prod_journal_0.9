@@ -148,29 +148,29 @@ const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades })
                                     barGap={chartConfig.barGap}
                                     style={chartConfig.style}
                                 >
-                                    <CartesianGrid 
-                                        strokeDasharray="3 3" 
+                                    <CartesianGrid
+                                        strokeDasharray="3 3"
                                         vertical={false}
-                                        stroke="var(--divider)"
+                                        stroke="hsl(var(--heroui-divider))"
                                         opacity={0.5}
                                     />
-                                    <XAxis 
+                                    <XAxis
                                         dataKey="symbol"
                                         angle={-45}
                                         textAnchor="end"
                                         height={60}
                                         interval={0}
-                                        tick={{ fill: 'var(--foreground)', fontSize: 12 }}
-                                        axisLine={{ stroke: 'var(--divider)' }}
+                                        tick={{ fill: 'hsl(var(--heroui-foreground))', fontSize: 12 }}
+                                        axisLine={{ stroke: 'hsl(var(--heroui-divider))' }}
                                     />
-                                    <YAxis 
+                                    <YAxis
                                         tickFormatter={formatCurrency}
-                                        tick={{ fill: 'var(--foreground)', fontSize: 12 }}
-                                        axisLine={{ stroke: 'var(--divider)' }}
+                                        tick={{ fill: 'hsl(var(--heroui-foreground))', fontSize: 12 }}
+                                        axisLine={{ stroke: 'hsl(var(--heroui-divider))' }}
                                     />
-                                    <Tooltip 
+                                    <Tooltip
                                         content={<CustomTooltip />}
-                                        cursor={{ fill: 'var(--hover)', opacity: 0.1 }}
+                                        cursor={{ fill: 'hsl(var(--heroui-content2))', opacity: 0.1 }}
                                     />
                                     <Bar 
                                         dataKey="pnl" 
@@ -214,25 +214,25 @@ const PnLDistributionCharts: React.FC<PnLDistributionChartsProps> = ({ trades })
                                     barGap={chartConfig.barGap}
                                     style={chartConfig.style}
                                 >
-                                    <CartesianGrid 
-                                        strokeDasharray="3 3" 
+                                    <CartesianGrid
+                                        strokeDasharray="3 3"
                                         vertical={false}
-                                        stroke="var(--divider)"
+                                        stroke="hsl(var(--heroui-divider))"
                                         opacity={0.5}
                                     />
-                                    <XAxis 
-                                        dataKey="day" 
-                                        tick={{ fill: 'var(--foreground)', fontSize: 12 }}
-                                        axisLine={{ stroke: 'var(--divider)' }}
+                                    <XAxis
+                                        dataKey="day"
+                                        tick={{ fill: 'hsl(var(--heroui-foreground))', fontSize: 12 }}
+                                        axisLine={{ stroke: 'hsl(var(--heroui-divider))' }}
                                     />
-                                    <YAxis 
+                                    <YAxis
                                         tickFormatter={formatCurrency}
-                                        tick={{ fill: 'var(--foreground)', fontSize: 12 }}
-                                        axisLine={{ stroke: 'var(--divider)' }}
+                                        tick={{ fill: 'hsl(var(--heroui-foreground))', fontSize: 12 }}
+                                        axisLine={{ stroke: 'hsl(var(--heroui-divider))' }}
                                     />
-                                    <Tooltip 
+                                    <Tooltip
                                         content={<CustomTooltip />}
-                                        cursor={{ fill: 'var(--hover)', opacity: 0.1 }}
+                                        cursor={{ fill: 'hsl(var(--heroui-content2))', opacity: 0.1 }}
                                     />
                                     <Bar 
                                         dataKey="pnl" 

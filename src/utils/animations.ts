@@ -80,7 +80,7 @@ export const metricVariants: Variants = {
   },
   hover: {
     y: -2,
-    backgroundColor: "var(--bg-content2)",
+    backgroundColor: "#F8F9FA", // Light mode content2
     transition: springTransition
   }
 };
@@ -143,7 +143,7 @@ export const tableRowVariants: Variants = {
     }
   }),
   hover: {
-    backgroundColor: "var(--bg-content2)",
+    backgroundColor: "#F8F9FA", // Light mode content2
     transition: {
       duration: 0.13
     }

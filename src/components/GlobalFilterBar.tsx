@@ -26,7 +26,7 @@ export const GlobalFilterBar: React.FC = () => {
   const { clearAccountingMethodData } = useAccountingMethod();
 
   // Comprehensive clear all data handler
-  const handleClearAllData = React.useCallback(() => {
+  const handleClearAllData = React.useCallback(async () => {
     const confirmed = window.confirm(
       '⚠️ WARNING: This will permanently delete ALL data including:\n\n' +
       '• All trades and trade data\n' +
@@ -55,8 +55,8 @@ export const GlobalFilterBar: React.FC = () => {
           try {
             console.log('🗑️ Starting comprehensive data clearing...');
 
-            // Clear all trades using the hook function
-            clearAllTrades();
+            // Clear all trades using the hook function (now async)
+            await clearAllTrades();
 
             // Clear accounting method data
             clearAccountingMethodData();

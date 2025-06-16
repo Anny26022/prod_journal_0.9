@@ -1,120 +1,144 @@
 import React from 'react';
 import { CapitalChange, MonthlyCapital, MonthlyCapitalHistory } from '../types/trade';
 import { generateId } from '../utils/helpers';
-import { usePortfolio } from '../utils/PortfolioContext';
+import { useTruePortfolio } from '../utils/TruePortfolioContext';
 import { calculateTradePL } from '../utils/accountingUtils';
-// Removed Supabase import - using localStorage only
+import { DatabaseService } from '../db/database';
+// Migrated from localStorage to IndexedDB using Dexie
 
-const CAPITAL_CHANGES_STORAGE_KEY = 'capital_changes';
-const MONTHLY_CAPITAL_HISTORY_KEY = 'monthly_capital_history';
-
-const loadCapitalChanges = (): CapitalChange[] => {
+// IndexedDB helpers using Dexie
+const loadCapitalChanges = async (): Promise<CapitalChange[]> => {
   if (typeof window === 'undefined') return [];
-  
+
   try {
-    const saved = localStorage.getItem(CAPITAL_CHANGES_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
+    const saved = await DatabaseService.getMiscData('capital_changes');
+    return saved ? saved : [];
   } catch (error) {
-    console.error('Error loading capital changes from localStorage:', error);
+    console.error('❌ Error loading capital changes from IndexedDB:', error);
     return [];
   }
 };
 
-const loadMonthlyCapitalHistory = (): MonthlyCapitalHistory[] => {
+const loadMonthlyCapitalHistory = async (): Promise<MonthlyCapitalHistory[]> => {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = localStorage.getItem(MONTHLY_CAPITAL_HISTORY_KEY);
-    return saved ? JSON.parse(saved) : [];
+    const saved = await DatabaseService.getMiscData('monthly_capital_history');
+    return saved ? saved : [];
   } catch (error) {
-    console.error('Error loading monthly capital history from localStorage:', error);
+    console.error('❌ Error loading monthly capital history from IndexedDB:', error);
     return [];
   }
 };
 
-const saveMonthlyCapitalHistory = (history: MonthlyCapitalHistory[]) => {
+const saveMonthlyCapitalHistory = async (history: MonthlyCapitalHistory[]): Promise<boolean> => {
   try {
-    localStorage.setItem(MONTHLY_CAPITAL_HISTORY_KEY, JSON.stringify(history));
+    return await DatabaseService.saveMiscData('monthly_capital_history', history);
   } catch (error) {
-    console.error('Error saving monthly capital history to localStorage:', error);
+    console.error('❌ Error saving monthly capital history to IndexedDB:', error);
+    return false;
   }
 };
 
-// localStorage helpers (removed Supabase functions)
+// IndexedDB helpers using Dexie
 
-function loadCapitalChanges(): CapitalChange[] {
+async function loadCapitalChangesLegacy(): Promise<CapitalChange[]> {
   try {
-    const stored = localStorage.getItem('capitalChanges');
-    return stored ? JSON.parse(stored) : [];
+    const stored = await DatabaseService.getMiscData('capitalChanges');
+    return stored ? stored : [];
   } catch (error) {
-    console.error('Error loading capital changes:', error);
+    console.error('❌ Error loading capital changes from IndexedDB:', error);
     return [];
   }
 }
 
-function saveCapitalChanges(changes: CapitalChange[]) {
+async function saveCapitalChanges(changes: CapitalChange[]): Promise<boolean> {
   try {
-    localStorage.setItem('capitalChanges', JSON.stringify(changes));
+    return await DatabaseService.saveMiscData('capitalChanges', changes);
   } catch (error) {
-    console.error('localStorage save error:', error);
+    console.error('❌ IndexedDB save error:', error);
+    return false;
   }
 }
 
-function fetchMonthlyCapitalHistory(): any[] {
+async function fetchMonthlyCapitalHistory(): Promise<any[]> {
   try {
-    const stored = localStorage.getItem('monthlyCapitalHistory');
-    return stored ? JSON.parse(stored) : [];
+    const stored = await DatabaseService.getMiscData('monthlyCapitalHistory');
+    return stored ? stored : [];
   } catch (error) {
-    console.error('Error fetching monthly capital history:', error);
+    console.error('❌ Error fetching monthly capital history from IndexedDB:', error);
     return [];
   }
 }
 
-function saveMonthlyCapitalHistory(history: any[]) {
+async function saveMonthlyCapitalHistoryLegacy(history: any[]): Promise<boolean> {
   try {
-    localStorage.setItem('monthlyCapitalHistory', JSON.stringify(history));
+    return await DatabaseService.saveMiscData('monthlyCapitalHistory', history);
   } catch (error) {
-    console.error('localStorage save error:', error);
+    console.error('❌ IndexedDB save error:', error);
+    return false;
   }
 }
 
 export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, useCashBasis: boolean = false) => {
-  const { getPortfolioSize, setPortfolioSize, monthlyPortfolioSizes } = usePortfolio();
+  const {
+    getTruePortfolioSize,
+    setYearlyStartingCapital,
+    capitalChanges,
+    addCapitalChange,
+    updateCapitalChange,
+    deleteCapitalChange
+  } = useTruePortfolio();
   
   const months = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
-  const [capitalChanges, setCapitalChanges] = React.useState<CapitalChange[]>([]);
+
+  // Use local state for legacy compatibility, but sync with TruePortfolio system
+  const [localCapitalChanges, setLocalCapitalChanges] = React.useState<CapitalChange[]>([]);
   const [monthlyCapital, setMonthlyCapital] = React.useState<MonthlyCapital[]>([]);
   const [monthlyCapitalHistory, setMonthlyCapitalHistory] = React.useState<MonthlyCapitalHistory[]>([]);
   const [loading, setLoading] = React.useState(true);
 
-  // Load from localStorage on mount
+  // Load from IndexedDB on mount and sync with TruePortfolio
   React.useEffect(() => {
-    const loadedChanges = loadCapitalChanges();
-    setCapitalChanges(loadedChanges);
-    const loadedHistory = fetchMonthlyCapitalHistory();
-    setMonthlyCapitalHistory(loadedHistory);
-    setLoading(false);
+    const loadData = async () => {
+      try {
+        const loadedChanges = await loadCapitalChangesLegacy();
+        setLocalCapitalChanges(loadedChanges);
+        const loadedHistory = await fetchMonthlyCapitalHistory();
+        setMonthlyCapitalHistory(loadedHistory);
+      } catch (error) {
+        console.error('❌ Failed to load capital data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
   }, []);
 
-  // Save capital changes to localStorage
+  // Save capital changes to IndexedDB
   React.useEffect(() => {
     if (!loading) {
-      saveCapitalChanges(capitalChanges);
+      saveCapitalChanges(localCapitalChanges).then(success => {
+        console.log(`📊 [useCapitalChanges] Capital changes save ${success ? 'successful' : 'failed'}`);
+      });
     }
-  }, [capitalChanges, loading]);
+  }, [localCapitalChanges, loading]);
 
-  // Save monthly capital history to localStorage
+  // Save monthly capital history to IndexedDB
   React.useEffect(() => {
     if (!loading) {
-      saveMonthlyCapitalHistory(monthlyCapitalHistory);
+      saveMonthlyCapitalHistoryLegacy(monthlyCapitalHistory).then(success => {
+        console.log(`📊 [useCapitalChanges] Monthly history save ${success ? 'successful' : 'failed'}`);
+      });
     }
   }, [monthlyCapitalHistory, loading]);
 
-    // Calculate monthly capital data
+    // Calculate monthly capital data using TruePortfolio system
   React.useEffect(() => {
-    if (!getPortfolioSize) return;
+    if (!getTruePortfolioSize) return;
     
     // Group trades and capital changes by month and year
     const monthlyData: Record<string, { trades: any[]; changes: CapitalChange[]; date: Date; monthName: string; year: number }> = {};
@@ -129,18 +153,15 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
       if (!latestDate || date > latestDate) latestDate = date;
     });
 
+    // Use TruePortfolio capital changes instead of local state
     capitalChanges.forEach(change => {
       const date = new Date(change.date);
       if (!earliestDate || date < earliestDate) earliestDate = date;
       if (!latestDate || date > latestDate) latestDate = date;
     });
 
-    // Include dates from monthlyPortfolioSizes
-    monthlyPortfolioSizes.forEach(monthlySize => {
-      const date = new Date(monthlySize.year, months.indexOf(monthlySize.month), 1);
-      if (!earliestDate || date < earliestDate) earliestDate = date;
-      if (!latestDate || date > latestDate) latestDate = date;
-    });
+    // Note: TruePortfolio system doesn't use monthlyPortfolioSizes
+    // It calculates portfolio size dynamically based on starting capital + changes + P/L
 
     if (!earliestDate || !latestDate) {
       setMonthlyCapital([]);
@@ -163,6 +184,7 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
       monthlyData[key].trades.push(trade);
     });
 
+    // Use TruePortfolio capital changes
     capitalChanges.forEach(change => {
       const date = new Date(change.date);
       const key = getMonthKey(date);
@@ -181,7 +203,7 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
     // Add an initial data point for the starting capital of the very first month
     const firstMonthName = earliestDate.toLocaleString('default', { month: 'short' });
     const firstYear = earliestDate.getFullYear();
-    const initialStartingCapitalForChart = getPortfolioSize(firstMonthName, firstYear);
+    const initialStartingCapitalForChart = getTruePortfolioSize(firstMonthName, firstYear, trades, useCashBasis);
     monthlyCapitalData.push({
       month: firstMonthName,
       year: firstYear,
@@ -199,20 +221,11 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
 
       const monthData = monthlyData[monthKey] || { trades: [], changes: [], date: new Date(year, cursorDate.getMonth(), 1), monthName, year };
 
-      // Get the explicit portfolio size for this month if set
-      const explicitMonthlySize = getPortfolioSize(monthName, year);
+      // Get the true portfolio size for this month using TruePortfolio system
+      const truePortfolioSize = getTruePortfolioSize(monthName, year, trades, useCashBasis);
 
-      // Determine starting capital for the month
-      let startingCapital: number;
-      // If an explicit monthly size is set for THIS month, use it.
-      // We check if the explicit size is different from the default/initial size
-      // to determine if a user-set value exists for this specific month.
-      if (explicitMonthlySize !== initialPortfolioSize) { // Compare with the hook's initialPortfolioSize parameter
-        startingCapital = explicitMonthlySize;
-      } else {
-        // Otherwise, carry over the final capital from the previous month.
-        startingCapital = currentCapital;
-      }
+      // Use TruePortfolio calculated size as starting capital
+      const startingCapital = truePortfolioSize;
 
       // Calculate deposits and withdrawals
       const deposits = monthData.changes.filter(c => c.type === 'deposit').reduce((sum, c) => sum + c.amount, 0);
@@ -244,96 +257,51 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
 
     setMonthlyCapital(monthlyCapitalData);
 
-  }, [trades, capitalChanges, getPortfolioSize, monthlyPortfolioSizes, initialPortfolioSize, months, useCashBasis]); // Added months and useCashBasis to dependencies
+  }, [trades, capitalChanges, getTruePortfolioSize, initialPortfolioSize, months, useCashBasis]); // Updated dependencies for TruePortfolio
 
-  const addCapitalChange = React.useCallback((change: Omit<CapitalChange, 'id'>) => {
+  const addCapitalChangeLocal = React.useCallback((change: Omit<CapitalChange, 'id'>) => {
     const newChange = {
       ...change,
       id: generateId()
     };
-    
-    // Update the portfolio size for the month of this change
-    const changeDate = new Date(change.date);
-    const month = changeDate.toLocaleString('default', { month: 'short' });
-    const year = changeDate.getFullYear();
-    
-    // Get current portfolio size for this month
-    const currentSize = getPortfolioSize(month, year);
-    
-    // Calculate new size based on deposit/withdrawal
-    const amount = change.type === 'deposit' ? change.amount : -change.amount;
-    const newSize = currentSize + amount;
-    
-    // Update the portfolio size
-    setPortfolioSize(newSize, month, year);
-    
-    // Add the change to the list
-    setCapitalChanges(prev => [...prev, newChange]);
-    
-    return newChange;
-  }, [getPortfolioSize, setPortfolioSize]);
 
-  const updateCapitalChange = (updatedChange: CapitalChange) => {
-    // Find the old change to calculate the difference
-    setCapitalChanges(prev => {
-      const oldChange = prev.find(c => c.id === updatedChange.id);
-      
-      if (oldChange) {
-        // Calculate the difference this change makes
-        const oldAmount = oldChange.type === 'deposit' ? oldChange.amount : -oldChange.amount;
-        const newAmount = updatedChange.type === 'deposit' ? updatedChange.amount : -updatedChange.amount;
-        const difference = newAmount - oldAmount;
-        
-        if (difference !== 0) {
-          // Update the portfolio size for the month of this change
-          const changeDate = new Date(updatedChange.date);
-          const month = changeDate.toLocaleString('default', { month: 'short' });
-          const year = changeDate.getFullYear();
-          
-          // Get current portfolio size for this month
-          const currentSize = getPortfolioSize(month, year);
-          
-          // Update the portfolio size by the difference
-          const newSize = currentSize + difference;
-          setPortfolioSize(newSize, month, year);
-        }
-      }
-      
-      return prev.map(change => 
+    // Add to TruePortfolio system
+    addCapitalChange(newChange);
+
+    // Also add to local state for backward compatibility
+    setLocalCapitalChanges(prev => [...prev, newChange]);
+
+    return newChange;
+  }, [addCapitalChange]);
+
+  const updateCapitalChangeLocal = (updatedChange: CapitalChange) => {
+    // Update in TruePortfolio system
+    updateCapitalChange(updatedChange);
+
+    // Update local state for backward compatibility
+    setLocalCapitalChanges(prev =>
+      prev.map(change =>
         change.id === updatedChange.id ? updatedChange : change
-      );
-    });
+      )
+    );
   };
 
-  const deleteCapitalChange = (id: string) => {
-    setCapitalChanges(prev => {
-      const changeToDelete = prev.find(c => c.id === id);
-      
-      if (changeToDelete) {
-        // Calculate the amount to adjust the portfolio size by
-        const amount = changeToDelete.type === 'deposit' 
-          ? -changeToDelete.amount  // Subtract deposit
-          : changeToDelete.amount;  // Add back withdrawal
-        
-        // Update the portfolio size for the month of this change
-        const changeDate = new Date(changeToDelete.date);
-        const month = changeDate.toLocaleString('default', { month: 'short' });
-        const year = changeDate.getFullYear();
-        
-        // Get current portfolio size for this month
-        const currentSize = getPortfolioSize(month, year);
-        
-        // Update the portfolio size by reversing the effect of this change
-        const newSize = currentSize + amount;
-        setPortfolioSize(newSize, month, year);
-      }
-      
-      return prev.filter(change => change.id !== id);
-    });
+  const deleteCapitalChangeLocal = (id: string) => {
+    // Delete from TruePortfolio system
+    deleteCapitalChange(id);
+
+    // Delete from local state for backward compatibility
+    setLocalCapitalChanges(prev => prev.filter(change => change.id !== id));
   };
 
   // Add or update monthly starting capital for a month/year
-  const setMonthlyStartingCapital = (month: string, year: number, startingCapital: number) => {
+  const setMonthlyStartingCapitalLocal = (month: string, year: number, startingCapital: number) => {
+    // For January, use TruePortfolio's yearly starting capital
+    if (month === 'Jan') {
+      setYearlyStartingCapital(year, startingCapital);
+    }
+
+    // Update local history for backward compatibility
     setMonthlyCapitalHistory(prev => {
       const idx = prev.findIndex(h => h.month === month && h.year === year);
       if (idx !== -1) {
@@ -349,12 +317,12 @@ export const useCapitalChanges = (trades: any[], initialPortfolioSize: number, u
   };
 
   return {
-    capitalChanges,
+    capitalChanges: localCapitalChanges, // Return local state for backward compatibility
     monthlyCapital,
-    addCapitalChange,
-    updateCapitalChange,
-    deleteCapitalChange,
+    addCapitalChange: addCapitalChangeLocal,
+    updateCapitalChange: updateCapitalChangeLocal,
+    deleteCapitalChange: deleteCapitalChangeLocal,
     monthlyCapitalHistory,
-    setMonthlyStartingCapital
+    setMonthlyStartingCapital: setMonthlyStartingCapitalLocal
   };
 }; 

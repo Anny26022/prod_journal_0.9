@@ -7,6 +7,7 @@ import { Trade } from "../../types/trade";
 import { calcOpenHeat, calcWeightedRewardRisk } from "../../utils/tradeCalculations";
 import { useTruePortfolioWithTrades } from "../../hooks/use-true-portfolio-with-trades";
 import { useAccountingCalculations, useAccountingMethodDisplay } from "../../hooks/use-accounting-calculations";
+import MobileTooltip from "../ui/MobileTooltip";
 
 interface MetricProps {
   label: string;
@@ -64,14 +65,14 @@ const Metric: React.FC<MetricProps> = React.memo(({
       >
         {label}
         {tooltip && (
-          <Tooltip content={tooltip}>
+          <MobileTooltip content={tooltip}>
             <motion.span
               whileHover={{ scale: 1.2 }}
               whileTap={{ scale: 0.9 }}
             >
               <Icon icon="lucide:info" className="w-3.5 h-3.5 text-default-400" />
             </motion.span>
-          </Tooltip>
+          </MobileTooltip>
         )}
       </motion.div>
       <motion.div 
@@ -154,12 +155,32 @@ interface PerformanceMetricsProps {
 
 export const PerformanceMetrics: React.FC<PerformanceMetricsProps> = ({ trades, isEditing = false }) => {
   const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
-  const { totalTrades, winRate, avgPosMove, avgNegMove, avgPositionSize, avgHoldingDays, avgR, planFollowed, openPositions } = useAccountingCalculations(trades);
+  const { totalTrades, winRate, avgPosMove, avgNegMove, avgPositionSize, avgHoldingDays, avgR, planFollowed, openPositions, useCashBasis } = useAccountingCalculations(trades);
   const { displayName } = useAccountingMethodDisplay();
 
   // Calculate remaining metrics not in shared hook
-  const cashPercentage = 100 - trades.reduce((sum, t) => sum + (t.allocation || 0), 0);
-  const openHeat = calcOpenHeat(trades, portfolioSize, getPortfolioSize);
+  // Cash percentage - only include open positions, deduplicate for cash basis
+  let openAndPartialTrades = trades.filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial');
+
+  if (useCashBasis) {
+    const seenTradeIds = new Set();
+    openAndPartialTrades = openAndPartialTrades.filter(trade => {
+      const originalId = trade.id.split('_exit_')[0];
+      if (seenTradeIds.has(originalId)) return false;
+      seenTradeIds.add(originalId);
+      return true;
+    });
+  }
+
+  const cashPercentage = 100 - openAndPartialTrades.reduce((sum, t) => {
+    // For partial positions, calculate remaining allocation
+    const remainingAllocation = t.positionStatus === 'Partial'
+      ? (t.allocation || 0) * (t.openQty || 0) / ((t.openQty || 0) + (t.exitedQty || 0))
+      : (t.allocation || 0);
+    return sum + remainingAllocation;
+  }, 0);
+
+  const openHeat = calcOpenHeat(openAndPartialTrades, portfolioSize, getPortfolioSize);
 
   return (
     <div className="space-y-4">

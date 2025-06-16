@@ -3,6 +3,7 @@ import { Trade } from '../../types/trade';
 import { Card, CardBody, CardHeader, Divider } from '@heroui/react';
 import { Icon } from '@iconify/react';
 import { motion } from 'framer-motion';
+import { useAccountingMethod } from '../../context/AccountingMethodContext';
 import {
   ResponsiveContainer,
   BarChart,
@@ -35,10 +36,24 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 const SetupFrequencyChart: React.FC<SetupFrequencyChartProps> = ({ trades }) => {
+  const { accountingMethod } = useAccountingMethod();
+  const useCashBasis = accountingMethod === 'cash';
 
   const chartData = useMemo(() => {
+    // For cash basis, deduplicate trades to avoid double counting
+    let uniqueTrades = trades;
+    if (useCashBasis) {
+      const seenTradeIds = new Set();
+      uniqueTrades = trades.filter(trade => {
+        const originalId = trade.id.split('_exit_')[0];
+        if (seenTradeIds.has(originalId)) return false;
+        seenTradeIds.add(originalId);
+        return true;
+      });
+    }
+
     const setupCounts: { [key: string]: number } = {};
-    trades.forEach(trade => {
+    uniqueTrades.forEach(trade => {
       if (trade.setup) {
         setupCounts[trade.setup] = (setupCounts[trade.setup] || 0) + 1;
       }
@@ -51,8 +66,8 @@ const SetupFrequencyChart: React.FC<SetupFrequencyChartProps> = ({ trades }) => 
         fill: chartColors[index % chartColors.length]
       }))
       .sort((a, b) => b.count - a.count);
-      
-  }, [trades]);
+
+  }, [trades, useCashBasis]);
 
   return (
     <Card className="border-divider bg-background">
@@ -74,16 +89,20 @@ const SetupFrequencyChart: React.FC<SetupFrequencyChartProps> = ({ trades }) => 
                 <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                         <XAxis type="number" hide />
-                        <YAxis 
-                            dataKey="name" 
-                            type="category" 
+                        <YAxis
+                            dataKey="name"
+                            type="category"
                             width={80}
-                            tick={{ fontSize: 12, fill: 'var(--foreground)' }}
+                            tick={{ fontSize: 12, fill: '#11181C' }} // Light mode foreground
                             tickLine={false}
                             axisLine={false}
                             interval={0}
                         />
-                        <RechartsTooltip cursor={{ fill: 'transparent' }} content={<CustomTooltip />} />
+                        <RechartsTooltip
+                            cursor={{ fill: 'transparent' }}
+                            content={<CustomTooltip />}
+                            trigger="click"
+                        />
                         <Bar dataKey="count" radius={[0, 8, 8, 0]} barSize={20}>
                             {chartData.map((entry) => (
                                 <Cell key={`cell-${entry.name}`} fill={entry.fill} />

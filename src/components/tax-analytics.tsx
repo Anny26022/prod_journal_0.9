@@ -86,22 +86,25 @@ const EditableText: React.FC<{
   );
 };
 
-// localStorage helpers
-function fetchTaxData() {
+// IndexedDB helpers using Dexie
+import { DatabaseService } from '../db/database';
+
+async function fetchTaxData(year: number) {
   try {
-    const stored = localStorage.getItem('taxData');
-    return stored ? JSON.parse(stored) : {};
+    const taxRecord = await DatabaseService.getTaxData(year);
+    return taxRecord ? taxRecord.data : {};
   } catch (error) {
-    console.error('Error fetching tax data:', error);
+    console.error('❌ Error fetching tax data from IndexedDB:', error);
     return {};
   }
 }
 
-function saveTaxData(taxData: any) {
+async function saveTaxData(year: number, taxData: any): Promise<boolean> {
   try {
-    localStorage.setItem('taxData', JSON.stringify(taxData));
+    return await DatabaseService.saveTaxData(year, taxData);
   } catch (error) {
-    console.error('localStorage save error:', error);
+    console.error('❌ IndexedDB save error:', error);
+    return false;
   }
 }
 
@@ -123,44 +126,35 @@ export const TaxAnalytics: React.FC = () => {
   const [taxesByMonth, setTaxesByMonth] = React.useState<{ [month: string]: number }>({});
   
   // Function to load tax data for the selected year
-  const loadTaxData = useCallback(() => {
-    const allTaxData = fetchTaxData();
-    const yearData = allTaxData[selectedYear] || {};
-    if (Object.keys(yearData).length > 0) {
-      setTaxesByMonth(prev => ({ ...prev, ...yearData }));
-    } else {
-      const initialData: { [month: string]: number } = {};
-      monthOrder.forEach(month => { initialData[month] = 0; });
-      setTaxesByMonth(initialData);
+  const loadTaxData = useCallback(async () => {
+    try {
+      const yearData = await fetchTaxData(selectedYear);
+      if (Object.keys(yearData).length > 0) {
+        setTaxesByMonth(prev => ({ ...prev, ...yearData }));
+      } else {
+        const initialData: { [month: string]: number } = {};
+        monthOrder.forEach(month => { initialData[month] = 0; });
+        setTaxesByMonth(initialData);
+      }
+    } catch (error) {
+      console.error('❌ Failed to load tax data:', error);
     }
   }, [selectedYear]);
 
   // Load tax data on mount and when selectedYear changes
   React.useEffect(() => {
     loadTaxData();
-    
-    // Add event listener for storage changes
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'taxData') {
-        loadTaxData();
-      }
-    };
-    
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Cleanup
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
+
+    // Note: IndexedDB doesn't have storage events like localStorage
+    // Data synchronization would need to be handled differently if needed
   }, [loadTaxData]);
   
-  // Save tax data to localStorage when it changes
+  // Save tax data to IndexedDB when it changes
   React.useEffect(() => {
     if (Object.keys(taxesByMonth).length > 0 && selectedYear) {
-      const allTaxData = fetchTaxData();
-      const currentData = { ...allTaxData };
-      currentData[selectedYear] = { ...taxesByMonth };
-      saveTaxData(currentData);
+      saveTaxData(selectedYear, taxesByMonth).then(success => {
+        console.log(`📊 [TaxAnalytics] Tax data save ${success ? 'successful' : 'failed'}`);
+      });
     }
   }, [taxesByMonth, selectedYear]);
   

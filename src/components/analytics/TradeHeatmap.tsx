@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { formatCurrency } from "../../utils/formatters";
 import { useAccountingMethod } from "../../context/AccountingMethodContext";
 import { calculateTradePL, getTradeDateForAccounting } from "../../utils/accountingUtils";
+import MobileTooltip from "../ui/MobileTooltip";
 
 interface TradeHeatmapProps {
   trades: any[];
@@ -25,8 +26,9 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
     const day = relevantDate.split("T")[0];
     const tradePL = calculateTradePL(trade, useCashBasis);
 
-
-
+    // For cash basis, we want to aggregate all exits on the same date
+    // This is intentional behavior - multiple exits on same date should sum up
+    // No deduplication needed here as we want the total P/L impact per day
     acc[day] = (acc[day] || 0) + tradePL;
     return acc;
   }, {} as Record<string, number>);
@@ -36,6 +38,8 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
     date,
     count: data[date],
   }));
+
+
 
   // Convert string dates to Date objects for CalendarHeatmap
   // Handle invalid date formats and provide fallbacks
@@ -56,13 +60,17 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
   // Get fallback dates from actual trade data
   const tradeDatesArray = Object.keys(data).filter(date => date.match(/^\d{4}-\d{2}-\d{2}$/)).sort();
   const earliestTradeDate = tradeDatesArray[0] || '2024-01-01';
-  const latestTradeDate = tradeDatesArray[tradeDatesArray.length - 1] || '2024-12-31';
+  const latestTradeDate = tradeDatesArray[tradeDatesArray.length - 1] || new Date().toISOString().split('T')[0];
+
+
 
   // Create start date with validation
   startDateObj = createValidDate(startDate, earliestTradeDate);
 
   // Create end date with validation
   endDateObj = createValidDate(endDate, latestTradeDate);
+
+
 
   // Validate the final Date objects before using them
   if (isNaN(startDateObj.getTime())) {
@@ -85,7 +93,7 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
     });
 
     return (
-      <Tooltip
+      <MobileTooltip
         key={value.date}
         content={
           <div className="p-2 text-sm">
@@ -109,7 +117,7 @@ const TradeHeatmap: React.FC<TradeHeatmapProps> = ({ trades, startDate, endDate,
             className: `${element.props.className} cursor-pointer`,
           })}
         </motion.g>
-      </Tooltip>
+      </MobileTooltip>
     );
   };
 

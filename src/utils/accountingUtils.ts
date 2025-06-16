@@ -110,7 +110,11 @@ export function groupTradesByMonth(trades: Trade[], useCashBasis: boolean = fals
 export function calculateTradePL(trade: Trade, useCashBasis: boolean = false): number {
   if (!useCashBasis) {
     // Accrual basis: Use the trade's total realized P/L
-    return trade.plRs || 0;
+    const accrualPL = trade.plRs ?? 0;
+
+
+
+    return accrualPL;
   } else {
     // Cash basis: Calculate P/L for the specific exit if it's a cash basis exit
     const cashBasisExit = trade._cashBasisExit;

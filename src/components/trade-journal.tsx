@@ -40,49 +40,43 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import { useAccountingMethod } from "../context/AccountingMethodContext";
 import { calculateTradePL } from "../utils/accountingUtils";
-import { getFromLocalStorage, setToLocalStorage } from "../utils/helpers";
+import { getFromLocalStorage, setToLocalStorage, getFromIndexedDB, setToIndexedDB } from "../utils/helpers";
+import { useAccountingCalculations } from "../hooks/use-accounting-calculations";
+import { formatCurrency as standardFormatCurrency, formatDate as standardFormatDate } from "../utils/formatters";
 // Removed Supabase import - using localStorage only
 
-// localStorage helpers for misc data
-function fetchMiscData(key: string) {
+// IndexedDB helpers for misc data using Dexie
+import { DatabaseService } from '../db/database';
+
+async function fetchMiscData(key: string) {
   try {
-    const stored = localStorage.getItem(`misc_${key}`);
-    return stored ? JSON.parse(stored) : null;
+    return await DatabaseService.getMiscData(`misc_${key}`);
   } catch (error) {
+    console.error('❌ Error fetching misc data from IndexedDB:', error);
     return null;
   }
 }
 
-function saveMiscData(key: string, value: any) {
+async function saveMiscData(key: string, value: any): Promise<boolean> {
   try {
-    localStorage.setItem(`misc_${key}`, JSON.stringify(value));
+    return await DatabaseService.saveMiscData(`misc_${key}`, value);
   } catch (error) {
-    // Handle error silently
+    console.error('❌ Error saving misc data to IndexedDB:', error);
+    return false;
   }
 }
 
 const csvUrl = '/name_sector_industry.csv';
 
-// Format a date string to a readable format
-const formatDate = (dateString: string) => {
-  try {
-    return format(new Date(dateString), 'MMM d, yyyy');
-  } catch (e) {
-    return dateString;
-  }
-};
-
-// Format a number as currency
+// Use standard formatters for consistency
+const formatDate = standardFormatDate;
 const formatCurrency = (value: number) => {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(value);
+  // Remove the ₹ symbol from standard formatter since we add it separately
+  return standardFormatCurrency(value).replace('₹', '');
 };
 
 import { Trade } from "../types/trade";
+import MobileTooltip from "./ui/MobileTooltip";
 
 export interface TradeJournalProps {
   title?: string;
@@ -136,30 +130,52 @@ export const TradeJournal = React.memo(function TradeJournal({
   // State for inline editing
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
+  // Local state for instant UI updates during inline editing
+  const [localTradeUpdates, setLocalTradeUpdates] = React.useState<Map<string, Partial<Trade>>>(new Map());
+
   // The trades from useTrades hook already include proper filtering, sorting, and cash basis expansion
-  // No need for additional processing here
-  const processedTrades = trades;
+  // Apply local updates for instant UI feedback
+  const processedTrades = React.useMemo(() => {
+    return trades.map(trade => {
+      const localUpdate = localTradeUpdates.get(trade.id);
+      return localUpdate ? { ...trade, ...localUpdate } : trade;
+    });
+  }, [trades, localTradeUpdates]);
+
+
+
+  // Use shared accounting calculations hook to eliminate redundant calculations
+  const sharedCalculations = useAccountingCalculations(processedTrades);
 
   // Memoize trade statistics calculations - now responsive to actual trade data changes
   const tradeStats = useMemo(() => {
-    const openPositions = trades.filter(t => t.positionStatus === "Open" || t.positionStatus === "Partial");
-    const closedTrades = trades.filter(t => t.positionStatus === "Closed");
+    // For cash basis, we need to count unique trades, not expanded entries
+    let uniqueTrades = processedTrades;
+    if (useCashBasis) {
+      const seenTradeIds = new Set();
+      uniqueTrades = processedTrades.filter(t => {
+        const originalId = t.id.split('_exit_')[0];
+        if (seenTradeIds.has(originalId)) return false;
+        seenTradeIds.add(originalId);
+        return true;
+      });
+    }
 
-    // Calculate P/L based on accounting method
-    const tradesWithAccountingPL = trades.map(trade => ({
-      ...trade,
-      accountingPL: calculateTradePL(trade, useCashBasis)
-    }));
+    const openPositions = uniqueTrades.filter(t => t.positionStatus === "Open" || t.positionStatus === "Partial");
+    const closedTrades = uniqueTrades.filter(t => t.positionStatus === "Closed");
+
+    // Use shared calculations instead of manual calculation
+    const tradesWithAccountingPL = sharedCalculations.tradesWithAccountingPL;
 
     const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0);
 
     return {
-      totalTrades: trades.length,
+      totalTrades: uniqueTrades.length,
       openPositionsCount: openPositions.length,
       winRate: tradesWithAccountingPL.length > 0 ? (winningTrades.length / tradesWithAccountingPL.length) * 100 : 0,
       totalPL: tradesWithAccountingPL.reduce((sum, t) => sum + (t.accountingPL || 0), 0)
     };
-  }, [trades, useCashBasis]); // Now depends on full trades array to catch data changes
+  }, [processedTrades, useCashBasis, sharedCalculations]); // Now depends on processed trades with local updates
 
   // Performance monitoring
   useEffect(() => {
@@ -243,7 +259,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       XLSX.writeFile(workbook, `trade_journal_${dateStr}${accountingMethodSuffix}.xlsx`);
     }
   };
-  
+
   const handleAddNewBlankTrade = useCallback(() => {
     // Find the max tradeNo among existing trades (as a number)
     const maxTradeNo = trades.length > 0
@@ -306,14 +322,15 @@ export const TradeJournal = React.memo(function TradeJournal({
     };
     addTrade(newTrade);
   }, [addTrade, trades]);
-  
+
   const { isOpen: isAddOpen, onOpen: onAddOpen, onOpenChange: onAddOpenChange } = useDisclosure();
   const { isOpen: isEditOpen, onOpen: onEditOpen, onOpenChange: onEditOpenChange } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onOpenChange: onDeleteOpenChange } = useDisclosure();
   const { isOpen: isUploadOpen, onOpen: onUploadOpen, onOpenChange: onUploadOpenChange } = useDisclosure();
-  
+
   const [selectedTrade, setSelectedTrade] = React.useState<Trade | null>(null);
   const [page, setPage] = React.useState(1);
+  const [optimisticUpdates, setOptimisticUpdates] = React.useState<Map<string, Partial<Trade>>>(new Map());
 
   // Dynamic pagination options based on dataset size
   const rowsPerPageOptions = React.useMemo(() => {
@@ -323,23 +340,40 @@ export const TradeJournal = React.memo(function TradeJournal({
     return [50, 100, 200];
   }, [trades.length]);
 
-  // Load rows per page from localStorage with fallback to 25, ensuring it's a valid option
+  // Load rows per page from IndexedDB with fallback to 10, ensuring it's a valid option
   // This persists the user's preferred rows per page setting across sessions
-  const [rowsPerPage, setRowsPerPage] = React.useState(() => {
-    const savedValue = getFromLocalStorage('tradeJournal_rowsPerPage', 25, (value) => parseInt(value, 10));
+  const [rowsPerPage, setRowsPerPage] = React.useState(10);
+  const [rowsPerPageLoaded, setRowsPerPageLoaded] = React.useState(false);
 
-    // Get initial options for validation (use default options if trades not loaded yet)
-    const initialOptions = trades.length < 500 ? [10, 25, 50] :
-                          trades.length < 2000 ? [25, 50, 100] : [50, 100, 200];
-
-    // Return saved value if it's valid, otherwise return default
-    return initialOptions.includes(savedValue) ? savedValue : 25;
-  });
-
-  // Save rows per page to localStorage whenever it changes
+  // Load rows per page from IndexedDB on mount
   React.useEffect(() => {
-    setToLocalStorage('tradeJournal_rowsPerPage', rowsPerPage, (value) => value.toString());
-  }, [rowsPerPage]);
+    const loadRowsPerPage = async () => {
+      try {
+        const savedValue = await getFromIndexedDB('tradeJournal_rowsPerPage', 10, (value) => parseInt(value, 10));
+
+        // Get initial options for validation (use default options if trades not loaded yet)
+        const initialOptions = trades.length < 500 ? [10, 25, 50] :
+                              trades.length < 2000 ? [25, 50, 100] : [50, 100, 200];
+
+        // Set saved value if it's valid, otherwise use default (10)
+        setRowsPerPage(initialOptions.includes(savedValue) ? savedValue : 10);
+      } catch (error) {
+        console.error('❌ Failed to load rows per page:', error);
+        setRowsPerPage(10);
+      } finally {
+        setRowsPerPageLoaded(true);
+      }
+    };
+
+    loadRowsPerPage();
+  }, [trades.length]);
+
+  // Save rows per page to IndexedDB whenever it changes
+  React.useEffect(() => {
+    if (rowsPerPageLoaded) {
+      setToIndexedDB('tradeJournal_rowsPerPage', rowsPerPage.toString());
+    }
+  }, [rowsPerPage, rowsPerPageLoaded]);
 
   // Validate and adjust rowsPerPage when options change (e.g., when dataset size changes)
   React.useEffect(() => {
@@ -351,7 +385,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       setRowsPerPage(closestOption);
     }
   }, [rowsPerPageOptions, rowsPerPage]);
-  
+
   // Progressive loading for large datasets
   const [loadedTradesCount, setLoadedTradesCount] = React.useState(() => {
     // Initial load: show more for smaller datasets, less for larger ones
@@ -378,20 +412,27 @@ export const TradeJournal = React.memo(function TradeJournal({
   }, [trades.length]);
 
   // Use progressive loading for large datasets, pagination for smaller ones
-  const shouldUseProgressiveLoading = trades.length > 500;
+  const shouldUseProgressiveLoading = processedTrades.length > 500;
 
-  const pages = shouldUseProgressiveLoading ? 1 : Math.ceil(trades.length / rowsPerPage);
+  const pages = shouldUseProgressiveLoading ? 1 : Math.ceil(processedTrades.length / rowsPerPage);
 
-  // Optimized pagination with better memoization
+  // Optimized pagination with optimistic updates applied
   const items = React.useMemo(() => {
+    let baseItems;
     if (shouldUseProgressiveLoading) {
-      return trades.slice(0, loadedTradesCount);
+      baseItems = processedTrades.slice(0, loadedTradesCount);
     } else {
       const start = (page - 1) * rowsPerPage;
       const end = start + rowsPerPage;
-      return trades.slice(start, end);
+      baseItems = processedTrades.slice(start, end);
     }
-  }, [page, trades, rowsPerPage, shouldUseProgressiveLoading, loadedTradesCount]);
+
+    // Apply optimistic updates for immediate UI feedback
+    return baseItems.map(trade => {
+      const optimisticUpdate = optimisticUpdates.get(trade.id);
+      return optimisticUpdate ? { ...trade, ...optimisticUpdate } : trade;
+    });
+  }, [page, processedTrades, rowsPerPage, shouldUseProgressiveLoading, loadedTradesCount, optimisticUpdates]);
 
   // Optimized page change handler with immediate UI update
   const handlePageChange = React.useCallback((newPage: number) => {
@@ -510,13 +551,50 @@ export const TradeJournal = React.memo(function TradeJournal({
     // 'initialQty' REMOVED to allow inline editing
   ];
 
+  // List of user-controlled fields that should never be auto-updated once user has edited them
+  const userControlledFields = [
+    'positionStatus', 'buySell', 'setup', 'exitTrigger', 'proficiencyGrowthAreas',
+    'planFollowed', 'notes', 'name', 'tradeNo'
+  ];
+
   // Check if a field is editable
   const isEditable = (field: string) => !nonEditableFields.includes(field);
+
+  // Check if a field is user-controlled (should not be auto-updated once user has edited it)
+  const isUserControlled = (field: string) => userControlledFields.includes(field);
+
+  // Helper function to get accounting-aware portfolio size
+  const getAccountingAwarePortfolioSize = React.useCallback((trade: Trade, exitedQty: number = 0) => {
+    if (!getPortfolioSize) return portfolioSize;
+
+    // For accrual basis: use entry date portfolio size
+    // For cash basis: use exit date portfolio size (if exits exist)
+    let relevantDate = trade.date; // Default to entry date
+
+    // For cash basis, use the latest exit date if available
+    if (accountingMethod === 'cash' && exitedQty > 0) {
+      const exitDates = [
+        trade.exit1Date,
+        trade.exit2Date,
+        trade.exit3Date
+      ].filter(date => date && date.trim() !== '').sort();
+
+      if (exitDates.length > 0) {
+        relevantDate = exitDates[exitDates.length - 1]; // Use latest exit date
+      }
+    }
+
+    const date = new Date(relevantDate);
+    const month = date.toLocaleString('default', { month: 'short' });
+    const year = date.getFullYear();
+    return getPortfolioSize(month, year);
+  }, [getPortfolioSize, portfolioSize, accountingMethod]);
 
 
 
   // Debounced update to reduce API calls and improve performance
   const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdatesRef = useRef<Map<string, { field: keyof Trade, value: any }>>(new Map());
 
   const handleInlineEditSave = React.useCallback(async (tradeId: string, field: keyof Trade, value: any) => {
     try {
@@ -546,6 +624,15 @@ export const TradeJournal = React.memo(function TradeJournal({
 
       // Create updated trade with the new value
       const updatedTrade = { ...tradeToUpdate, [field]: parsedValue };
+
+      // Track that this field has been manually edited by the user
+      if (!updatedTrade._userEditedFields) {
+        updatedTrade._userEditedFields = [];
+      }
+      if (!updatedTrade._userEditedFields.includes(field as string)) {
+        updatedTrade._userEditedFields.push(field as string);
+
+      }
 
       // If the field is 'name', fetch the latest price and update cmp (only if CMP is currently 0 or not manually set)
       if (field === 'name' && parsedValue) {
@@ -597,35 +684,342 @@ export const TradeJournal = React.memo(function TradeJournal({
         updatedTrade._cmpAutoFetched = false;
       }
 
-      // Recalculate dependent fields if needed
+      // CRITICAL FIX: Recalculate ALL dependent fields for any significant change
       if ([
         'entry', 'sl', 'tsl', 'initialQty', 'pyramid1Qty', 'pyramid2Qty',
-        'exit1Price', 'exit2Price', 'exit3Price', 'cmp'
+        'exit1Price', 'exit2Price', 'exit3Price', 'exit1Qty', 'exit2Qty', 'exit3Qty',
+        'exit1Date', 'exit2Date', 'exit3Date', 'cmp', 'buySell', 'positionStatus'
       ].includes(field as string)) {
-        updatedTrade.openHeat = calcTradeOpenHeat(updatedTrade, portfolioSize, getPortfolioSize);
-      }
 
-      // Immediately update the trade in the local state for instant UI feedback
-      updateTrade(updatedTrade);
+        // Recalculate all entry-related fields
+        const allEntries = [
+          { price: updatedTrade.entry, qty: updatedTrade.initialQty },
+          { price: updatedTrade.pyramid1Price, qty: updatedTrade.pyramid1Qty },
+          { price: updatedTrade.pyramid2Price, qty: updatedTrade.pyramid2Qty }
+        ].filter(e => e.price > 0 && e.qty > 0);
 
-      // Debounced update to reduce API calls (but UI is already updated)
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
+        // Calculate average entry
+        const totalQty = allEntries.reduce((sum, e) => sum + e.qty, 0);
+        const totalValue = allEntries.reduce((sum, e) => sum + (e.price * e.qty), 0);
+        updatedTrade.avgEntry = totalQty > 0 ? totalValue / totalQty : updatedTrade.entry;
 
-      updateTimeoutRef.current = setTimeout(async () => {
-        try {
-          // This is just for persistence - UI is already updated
-          await updateTrade(updatedTrade);
-        } catch (error) {
-          // Handle error silently
+        // Recalculate all exit-related fields
+        const allExits = [
+          { price: updatedTrade.exit1Price, qty: updatedTrade.exit1Qty, date: updatedTrade.exit1Date },
+          { price: updatedTrade.exit2Price, qty: updatedTrade.exit2Qty, date: updatedTrade.exit2Date },
+          { price: updatedTrade.exit3Price, qty: updatedTrade.exit3Qty, date: updatedTrade.exit3Date }
+        ].filter(e => e.price > 0 && e.qty > 0 && e.date);
+
+        // Calculate exit quantities and averages
+        const exitedQty = allExits.reduce((sum, e) => sum + e.qty, 0);
+        const exitValue = allExits.reduce((sum, e) => sum + (e.price * e.qty), 0);
+        const avgExitPrice = exitedQty > 0 ? exitValue / exitedQty : 0;
+
+        updatedTrade.exitedQty = exitedQty;
+        updatedTrade.avgExitPrice = avgExitPrice;
+        updatedTrade.openQty = totalQty - exitedQty;
+
+        // Calculate position size and allocation
+        updatedTrade.positionSize = totalValue;
+        const currentPortfolioSize = getPortfolioSize ?
+          (() => {
+            const tradeDate = new Date(updatedTrade.date);
+            const month = tradeDate.toLocaleString('default', { month: 'short' });
+            const year = tradeDate.getFullYear();
+            return getPortfolioSize(month, year);
+          })() : portfolioSize;
+        updatedTrade.allocation = currentPortfolioSize > 0 ? (totalValue / currentPortfolioSize) * 100 : 0;
+
+        // Calculate realized P/L using FIFO
+        if (exitedQty > 0) {
+          const entryLotsForFifo = allEntries.map(e => ({ price: e.price, qty: e.qty }));
+          const exitLotsForFifo = allExits.map(e => ({ price: e.price, qty: e.qty }));
+          updatedTrade.plRs = calcRealizedPL_FIFO(entryLotsForFifo, exitLotsForFifo, updatedTrade.buySell as 'Buy' | 'Sell');
+          updatedTrade.realisedAmount = exitValue;
+        } else {
+          updatedTrade.plRs = 0;
+          updatedTrade.realisedAmount = 0;
         }
-      }, 200); // Reduced debounce delay since UI updates immediately
 
+        // Calculate accounting-aware portfolio impact
+        const accountingAwarePortfolioSize = getAccountingAwarePortfolioSize(updatedTrade, exitedQty);
+        updatedTrade.pfImpact = accountingAwarePortfolioSize > 0 ? (updatedTrade.plRs / accountingAwarePortfolioSize) * 100 : 0;
+
+        // Update position status based on quantities ONLY if user has never manually set it
+        const hasUserEditedPositionStatus = tradeToUpdate._userEditedFields?.includes('positionStatus');
+        const shouldAutoUpdatePositionStatus = field !== 'positionStatus' && !hasUserEditedPositionStatus;
+
+        // Debug logging for position status updates
+        if (field !== 'positionStatus') {
+          console.log(`🔄 Position Status Check for ${tradeToUpdate.name}:`, {
+            field,
+            hasUserEditedPositionStatus,
+            shouldAutoUpdatePositionStatus,
+            userEditedFields: tradeToUpdate._userEditedFields,
+            currentStatus: tradeToUpdate.positionStatus,
+            openQty: updatedTrade.openQty,
+            exitedQty
+          });
+        }
+
+        if (shouldAutoUpdatePositionStatus) {
+          const newStatus = updatedTrade.openQty <= 0 && exitedQty > 0 ? 'Closed'
+                          : exitedQty > 0 && updatedTrade.openQty > 0 ? 'Partial'
+                          : 'Open';
+
+          if (newStatus !== updatedTrade.positionStatus) {
+            console.log(`🔄 Auto-updating position status for ${tradeToUpdate.name}: ${updatedTrade.positionStatus} → ${newStatus}`);
+            updatedTrade.positionStatus = newStatus;
+          }
+        }
+
+        // Calculate other dependent fields
+        updatedTrade.openHeat = calcTradeOpenHeat(updatedTrade, currentPortfolioSize, getPortfolioSize);
+
+        // Calculate SL percentage
+        if (updatedTrade.sl > 0 && updatedTrade.avgEntry > 0) {
+          updatedTrade.slPercent = Math.abs(((updatedTrade.sl - updatedTrade.avgEntry) / updatedTrade.avgEntry) * 100);
+        }
+
+        // Calculate stock move
+        if (updatedTrade.cmp > 0 && updatedTrade.avgEntry > 0) {
+          updatedTrade.stockMove = updatedTrade.buySell === 'Buy'
+            ? ((updatedTrade.cmp - updatedTrade.avgEntry) / updatedTrade.avgEntry) * 100
+            : ((updatedTrade.avgEntry - updatedTrade.cmp) / updatedTrade.avgEntry) * 100;
+        }
+      }
+
+      // Optimistic UI update - apply changes locally first for immediate feedback
+      setOptimisticUpdates(prev => {
+        const newUpdates = new Map(prev);
+        const existingUpdate = newUpdates.get(tradeId) || {};
+
+        // Create optimistic update with calculated fields
+        const optimisticUpdate: Partial<Trade> = {
+          ...existingUpdate,
+          [field]: parsedValue,
+          // Include user edit tracking
+          ...(updatedTrade._userEditedFields !== undefined ? { _userEditedFields: updatedTrade._userEditedFields } : {}),
+          // Include calculated fields for instant feedback
+          ...(updatedTrade.avgEntry !== undefined ? { avgEntry: updatedTrade.avgEntry } : {}),
+          ...(updatedTrade.exitedQty !== undefined ? { exitedQty: updatedTrade.exitedQty } : {}),
+          ...(updatedTrade.avgExitPrice !== undefined ? { avgExitPrice: updatedTrade.avgExitPrice } : {}),
+          ...(updatedTrade.openQty !== undefined ? { openQty: updatedTrade.openQty } : {}),
+          ...(updatedTrade.positionSize !== undefined ? { positionSize: updatedTrade.positionSize } : {}),
+          ...(updatedTrade.allocation !== undefined ? { allocation: updatedTrade.allocation } : {}),
+          ...(updatedTrade.plRs !== undefined ? { plRs: updatedTrade.plRs } : {}),
+          ...(updatedTrade.realisedAmount !== undefined ? { realisedAmount: updatedTrade.realisedAmount } : {}),
+          ...(updatedTrade.pfImpact !== undefined ? { pfImpact: updatedTrade.pfImpact } : {}),
+          ...(updatedTrade.positionStatus !== undefined ? { positionStatus: updatedTrade.positionStatus } : {}),
+          ...(updatedTrade.openHeat !== undefined ? { openHeat: updatedTrade.openHeat } : {}),
+          ...(updatedTrade.slPercent !== undefined ? { slPercent: updatedTrade.slPercent } : {}),
+          ...(updatedTrade.stockMove !== undefined ? { stockMove: updatedTrade.stockMove } : {}),
+          ...(updatedTrade._cmpAutoFetched !== undefined ? { _cmpAutoFetched: updatedTrade._cmpAutoFetched } : {})
+        };
+
+        newUpdates.set(tradeId, optimisticUpdate);
+        return newUpdates;
+      });
+
+      // Debounced background update with callback to clear optimistic updates
+      updateTrade(updatedTrade, () => {
+        // Clear optimistic update once real update is complete
+        setOptimisticUpdates(prev => {
+          const newUpdates = new Map(prev);
+          newUpdates.delete(tradeId);
+          return newUpdates;
+        });
+      });
     } catch (error) {
-      // Handle error silently
+      console.error(`❌ Error in handleInlineEditSave for trade ${tradeId} field '${field}':`, error);
+      // Clear any optimistic updates on error
+      setOptimisticUpdates(prev => {
+        const newUpdates = new Map(prev);
+        newUpdates.delete(tradeId);
+        return newUpdates;
+      });
     }
-  }, [trades, isEditable, portfolioSize, getPortfolioSize, updateTrade]);
+  }, [trades, isEditable, portfolioSize, getPortfolioSize, updateTrade, getAccountingAwarePortfolioSize]);
+  // Keyboard navigation for editable fields
+  const getEditableFields = React.useCallback(() => {
+    const editableColumns = allColumns.filter(col =>
+      col.key !== 'actions' &&
+      visibleColumns.includes(col.key) &&
+      isEditable(col.key)
+    );
+    return editableColumns.map(col => col.key);
+  }, [visibleColumns, isEditable, allColumns]);
+
+  // Tab navigation state
+  const [currentTabIndex, setCurrentTabIndex] = React.useState<{row: number, col: number} | null>(null);
+
+  // Get all editable cells in order (row by row, then column by column)
+  const getAllEditableCells = React.useCallback(() => {
+    const editableFields = getEditableFields();
+    const cells: Array<{tradeId: string, field: string, rowIndex: number, colIndex: number}> = [];
+
+    processedTrades.forEach((trade, rowIndex) => {
+      editableFields.forEach((field, colIndex) => {
+        cells.push({
+          tradeId: trade.id,
+          field,
+          rowIndex,
+          colIndex
+        });
+      });
+    });
+
+    return cells;
+  }, [processedTrades, getEditableFields]);
+
+  // Handle tab navigation
+  const handleTabNavigation = React.useCallback((direction: 'next' | 'prev') => {
+    const allCells = getAllEditableCells();
+    if (allCells.length === 0) return;
+
+    let newIndex = 0;
+
+    if (currentTabIndex) {
+      const currentCellIndex = allCells.findIndex(cell =>
+        cell.rowIndex === currentTabIndex.row && cell.colIndex === currentTabIndex.col
+      );
+
+      if (direction === 'next') {
+        newIndex = (currentCellIndex + 1) % allCells.length;
+      } else {
+        newIndex = currentCellIndex - 1;
+        if (newIndex < 0) newIndex = allCells.length - 1;
+      }
+    }
+
+    const targetCell = allCells[newIndex];
+    setCurrentTabIndex({ row: targetCell.rowIndex, col: targetCell.colIndex });
+
+    // Focus the target cell and activate editing
+    setTimeout(() => {
+      const cellElement = document.querySelector(
+        `[data-trade-id="${targetCell.tradeId}"][data-field="${targetCell.field}"]`
+      ) as HTMLElement;
+
+      if (cellElement) {
+        cellElement.focus();
+        cellElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        // Automatically trigger editing/dropdown for the focused cell
+        const clickEvent = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window
+        });
+        cellElement.dispatchEvent(clickEvent);
+
+        // For dropdown cells, also trigger Enter key to open dropdown
+        const enterEvent = new KeyboardEvent('keydown', {
+          key: 'Enter',
+          bubbles: true,
+          cancelable: true
+        });
+        cellElement.dispatchEvent(enterEvent);
+      }
+    }, 0);
+  }, [currentTabIndex, getAllEditableCells]);
+
+  // Global keyboard event handler for tab navigation
+  React.useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        handleTabNavigation(e.shiftKey ? 'prev' : 'next');
+      }
+    };
+
+    document.addEventListener('keydown', handleGlobalKeyDown);
+    return () => document.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [handleTabNavigation]);
+
+  const handleKeyboardNavigation = React.useCallback((e: KeyboardEvent) => {
+    // Only handle Tab key navigation
+    if (e.key !== 'Tab') return;
+
+    const activeElement = document.activeElement;
+    if (!activeElement) return;
+
+    // Check if we're in an editable cell
+    const editableCell = activeElement.closest('[data-editable-cell]');
+    if (!editableCell) return;
+
+    e.preventDefault();
+
+    const tradeId = editableCell.getAttribute('data-trade-id');
+    const currentField = editableCell.getAttribute('data-field');
+
+    if (!tradeId || !currentField) return;
+
+    const editableFields = getEditableFields();
+    const currentFieldIndex = editableFields.indexOf(currentField);
+
+    if (currentFieldIndex === -1) return;
+
+    let nextFieldIndex: number;
+    let nextTradeIndex: number;
+
+    const currentTradeIndex = items.findIndex(trade => trade.id === tradeId);
+
+    if (e.shiftKey) {
+      // Navigate backwards
+      if (currentFieldIndex > 0) {
+        // Move to previous field in same row
+        nextFieldIndex = currentFieldIndex - 1;
+        nextTradeIndex = currentTradeIndex;
+      } else if (currentTradeIndex > 0) {
+        // Move to last field of previous row
+        nextFieldIndex = editableFields.length - 1;
+        nextTradeIndex = currentTradeIndex - 1;
+      } else {
+        return; // Already at first field of first row
+      }
+    } else {
+      // Navigate forwards
+      if (currentFieldIndex < editableFields.length - 1) {
+        // Move to next field in same row
+        nextFieldIndex = currentFieldIndex + 1;
+        nextTradeIndex = currentTradeIndex;
+      } else if (currentTradeIndex < items.length - 1) {
+        // Move to first field of next row
+        nextFieldIndex = 0;
+        nextTradeIndex = currentTradeIndex + 1;
+      } else {
+        return; // Already at last field of last row
+      }
+    }
+
+    const nextTrade = items[nextTradeIndex];
+    const nextField = editableFields[nextFieldIndex];
+
+    // Focus the next editable cell
+    setTimeout(() => {
+      const nextCell = document.querySelector(
+        `[data-editable-cell][data-trade-id="${nextTrade.id}"][data-field="${nextField}"]`
+      ) as HTMLElement;
+
+      if (nextCell) {
+        nextCell.focus();
+        // If it's an input field, select all text
+        const input = nextCell.querySelector('input');
+        if (input) {
+          input.select();
+        }
+      }
+    }, 0);
+  }, [getEditableFields, items]);
+
+  // Add keyboard event listener
+  React.useEffect(() => {
+    document.addEventListener('keydown', handleKeyboardNavigation);
+    return () => {
+      document.removeEventListener('keydown', handleKeyboardNavigation);
+    };
+  }, [handleKeyboardNavigation]);
 
 
 
@@ -634,30 +1028,30 @@ export const TradeJournal = React.memo(function TradeJournal({
   // Format cell value based on its type
   const formatCellValue = (value: any, key: string) => {
     if (value === undefined || value === null || value === '') return '-';
-    
+
     // Format dates
     if (key.endsWith('Date')) {
       return formatDate(value as string);
     }
-    
-    // Format currency values
+
+    // Format currency values with single rupee symbol
     if ([
-      'entry', 'avgEntry', 'sl', 'tsl', 'cmp', 'pyramid1Price', 'pyramid2Price', 
+      'entry', 'avgEntry', 'sl', 'tsl', 'cmp', 'pyramid1Price', 'pyramid2Price',
       'exit1Price', 'exit2Price', 'exit3Price', 'avgExitPrice', 'realisedAmount', 'plRs'
     ].includes(key)) {
-      return formatCurrency(Number(value));
+      return '₹' + formatCurrency(Number(value));
     }
-    
+
     // Format percentage values
     if (['slPercent', 'openHeat', 'allocation', 'pfImpact', 'cummPf', 'stockMove'].includes(key)) {
       return `${Number(value).toFixed(2)}%`;
     }
-    
+
     // Format position size to whole number
     if (key === 'positionSize') {
       return String(Math.round(Number(value)));
     }
-    
+
     // Format reward/risk ratio
     if (key === 'rewardRisk') {
       const rr = Number(value);
@@ -668,12 +1062,12 @@ export const TradeJournal = React.memo(function TradeJournal({
         return '-';
       }
     }
-    
+
     // Format boolean values
     if (key === 'planFollowed') {
       return value ? 'Yes' : 'No';
     }
-    
+
     return String(value);
   };
 
@@ -688,185 +1082,678 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
+  // Pre-compute all tooltip data for better performance
+  const precomputedTooltips = React.useMemo(() => {
+    const tooltipData = new Map();
+
+    items.forEach(trade => {
+      const tradeTooltips: any = {};
+
+      // Pre-compute holding days tooltip
+      const isOpenPosition = trade.positionStatus === 'Open';
+      const isPartialPosition = trade.positionStatus === 'Partial';
+      const entryLots = [
+        { label: 'Initial Entry', date: trade.date, qty: Number(trade.initialQty) },
+        { label: 'Pyramid 1', date: trade.pyramid1Date, qty: Number(trade.pyramid1Qty) },
+        { label: 'Pyramid 2', date: trade.pyramid2Date, qty: Number(trade.pyramid2Qty) }
+      ].filter(e => e.date && e.qty > 0);
+
+      const exitLots = [
+        { date: trade.exit1Date, qty: Number(trade.exit1Qty) },
+        { date: trade.exit2Date, qty: Number(trade.exit2Qty) },
+        { date: trade.exit3Date, qty: Number(trade.exit3Qty) }
+      ].filter(e => e.date && e.qty > 0);
+
+      let remainingExits = exitLots.map(e => ({ ...e }));
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const lotBreakdown: { label: string, qty: number, days: number, exited: boolean, exitDate?: string }[] = [];
+
+      for (const lot of entryLots) {
+        let qtyLeft = lot.qty;
+        let entryDate = new Date(lot.date);
+        entryDate.setHours(0,0,0,0);
+
+        while (qtyLeft > 0 && remainingExits.length > 0) {
+          const exit = remainingExits[0];
+          const exitDate = new Date(exit.date);
+          exitDate.setHours(0,0,0,0);
+          const usedQty = Math.min(qtyLeft, exit.qty);
+          const days = Math.max(1, Math.ceil((exitDate.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)));
+          lotBreakdown.push({ label: lot.label, qty: usedQty, days, exited: true, exitDate: exit.date });
+          qtyLeft -= usedQty;
+          exit.qty -= usedQty;
+          if (exit.qty === 0) remainingExits.shift();
+        }
+
+        if (qtyLeft > 0) {
+          const days = Math.max(1, Math.ceil((today.getTime() - entryDate.getTime()) / (1000 * 60 * 60 * 24)));
+          lotBreakdown.push({ label: lot.label, qty: qtyLeft, days, exited: false });
+        }
+      }
+
+      let displayDays = 0;
+      if (isOpenPosition) {
+        const openLots = lotBreakdown.filter(l => !l.exited);
+        const totalQty = openLots.reduce((sum, l) => sum + l.qty, 0);
+        displayDays = totalQty > 0 ? Math.round(openLots.reduce((sum, l) => sum + l.days * l.qty, 0) / totalQty) : 0;
+      } else if (isPartialPosition) {
+        const openLots = lotBreakdown.filter(l => !l.exited);
+        const exitedLots = lotBreakdown.filter(l => l.exited);
+        const openQty = openLots.reduce((sum, l) => sum + l.qty, 0);
+        const exitedQty = exitedLots.reduce((sum, l) => sum + l.qty, 0);
+        if (openQty > 0) {
+          displayDays = Math.round(openLots.reduce((sum, l) => sum + l.days * l.qty, 0) / openQty);
+        } else if (exitedQty > 0) {
+          displayDays = Math.round(exitedLots.reduce((sum, l) => sum + l.days * l.qty, 0) / exitedQty);
+        }
+      } else {
+        const exitedLots = lotBreakdown.filter(l => l.exited);
+        const exitedQty = exitedLots.reduce((sum, l) => sum + l.qty, 0);
+        displayDays = exitedQty > 0 ? Math.round(exitedLots.reduce((sum, l) => sum + l.days * l.qty, 0) / exitedQty) : 0;
+      }
+
+      tradeTooltips.holdingDays = {
+        displayDays,
+        lotBreakdown,
+        isOpenPosition,
+        isPartialPosition
+      };
+
+      // Pre-compute R:R tooltip
+      const entries = [
+        { label: 'Initial Entry', price: Number(trade.entry), qty: Number(trade.initialQty) },
+        { label: 'Pyramid 1', price: Number(trade.pyramid1Price), qty: Number(trade.pyramid1Qty) },
+        { label: 'Pyramid 2', price: Number(trade.pyramid2Price), qty: Number(trade.pyramid2Qty) }
+      ].filter(e => e.price > 0 && e.qty > 0);
+
+      const totalQtyAll = entries.reduce((sum, e) => sum + (e.qty || 0), 0);
+      const tsl = Number(trade.tsl);
+      const sl = Number(trade.sl);
+      const cmp = Number(trade.cmp);
+      const avgExit = Number(trade.avgExitPrice);
+      const buySell = trade.buySell;
+      const positionStatus = trade.positionStatus;
+      const exitedQty = Number(trade.exitedQty);
+      const openQty = Number(trade.openQty);
+
+      // Calculate FIFO exit allocation per entry
+      const rrExitLots = [
+        { date: trade.exit1Date, qty: Number(trade.exit1Qty), price: Number(trade.exit1Price) },
+        { date: trade.exit2Date, qty: Number(trade.exit2Qty), price: Number(trade.exit2Price) },
+        { date: trade.exit3Date, qty: Number(trade.exit3Qty), price: Number(trade.exit3Price) }
+      ].filter(e => e.date && e.qty > 0 && e.price > 0);
+
+      // FIFO allocation: determine how much of each entry was exited
+      let rrRemainingExits = rrExitLots.map(e => ({ ...e }));
+      const entryExitAllocations = entries.map(entry => {
+        let entryQtyLeft = entry.qty;
+        let totalExitValue = 0;
+        let totalExitQty = 0;
+
+        // Allocate exits to this entry using FIFO
+        while (entryQtyLeft > 0 && rrRemainingExits.length > 0) {
+          const exit = rrRemainingExits[0];
+          const usedQty = Math.min(entryQtyLeft, exit.qty);
+
+          totalExitValue += usedQty * exit.price;
+          totalExitQty += usedQty;
+
+          entryQtyLeft -= usedQty;
+          exit.qty -= usedQty;
+
+          if (exit.qty === 0) rrRemainingExits.shift();
+        }
+
+        const avgExitPriceForEntry = totalExitQty > 0 ? totalExitValue / totalExitQty : 0;
+        const exitedQtyForEntry = totalExitQty;
+        const openQtyForEntry = entryQtyLeft;
+
+        return {
+          ...entry,
+          exitedQtyForEntry,
+          openQtyForEntry,
+          avgExitPriceForEntry
+        };
+      });
+
+      const entryBreakdown = entryExitAllocations.map(e => {
+        let stop;
+        if (e.label === 'Initial Entry') {
+          stop = sl;
+        } else {
+          stop = tsl > 0 ? tsl : sl;
+        }
+        const rawRisk = buySell === 'Buy' ? e.price - stop : stop - e.price;
+        const risk = Math.abs(rawRisk);
+        let reward = 0;
+        let rewardFormula = '';
+
+        if (positionStatus === 'Open') {
+          reward = buySell === 'Buy' ? cmp - e.price : e.price - cmp;
+          rewardFormula = buySell === 'Buy'
+            ? `CMP - Entry = ${cmp} - ${e.price} = ${(cmp - e.price).toFixed(2)} (Unrealized)`
+            : `Entry - CMP = ${e.price} - ${cmp} = ${(e.price - cmp).toFixed(2)} (Unrealized)`;
+        } else if (positionStatus === 'Closed') {
+          reward = buySell === 'Buy' ? avgExit - e.price : e.price - avgExit;
+          rewardFormula = buySell === 'Buy'
+            ? `Avg. Exit - Entry = ${avgExit} - ${e.price} = ${(avgExit - e.price).toFixed(2)} (Realized)`
+            : `Entry - Avg. Exit = ${e.price} - ${avgExit} = ${(e.price - avgExit).toFixed(2)} (Realized)`;
+        } else if (positionStatus === 'Partial') {
+          // Use FIFO-allocated quantities for this specific entry
+          const exitedQtyForEntry = e.exitedQtyForEntry;
+          const openQtyForEntry = e.openQtyForEntry;
+          const avgExitPriceForEntry = e.avgExitPriceForEntry;
+          const totalQtyForEntry = exitedQtyForEntry + openQtyForEntry;
+
+          if (exitedQtyForEntry > 0 && openQtyForEntry > 0) {
+            // Mixed: part realized, part unrealized for this entry
+            const realizedReward = buySell === 'Buy' ? avgExitPriceForEntry - e.price : e.price - avgExitPriceForEntry;
+            const unrealizedReward = buySell === 'Buy' ? cmp - e.price : e.price - cmp;
+            reward = ((realizedReward * exitedQtyForEntry) + (unrealizedReward * openQtyForEntry)) / totalQtyForEntry;
+            rewardFormula = `Weighted: ((Realized: ${realizedReward.toFixed(2)} × ${exitedQtyForEntry}) + (Unrealized: ${unrealizedReward.toFixed(2)} × ${openQtyForEntry})) / ${totalQtyForEntry} = ${reward.toFixed(2)}`;
+          } else if (exitedQtyForEntry > 0) {
+            // Fully realized for this entry
+            reward = buySell === 'Buy' ? avgExitPriceForEntry - e.price : e.price - avgExitPriceForEntry;
+            rewardFormula = buySell === 'Buy'
+              ? `Avg. Exit - Entry = ${avgExitPriceForEntry.toFixed(2)} - ${e.price} = ${reward.toFixed(2)} (Realized)`
+              : `Entry - Avg. Exit = ${e.price} - ${avgExitPriceForEntry.toFixed(2)} = ${reward.toFixed(2)} (Realized)`;
+          } else {
+            // Fully unrealized for this entry
+            reward = buySell === 'Buy' ? cmp - e.price : e.price - cmp;
+            rewardFormula = buySell === 'Buy'
+              ? `CMP - Entry = ${cmp} - ${e.price} = ${reward.toFixed(2)} (Unrealized)`
+              : `Entry - CMP = ${e.price} - ${cmp} = ${reward.toFixed(2)} (Unrealized)`;
+          }
+        }
+
+        const rrValue = risk !== 0 ? Math.abs(reward / risk) : Infinity;
+        const isRiskFree = risk === 0;
+        return {
+          label: e.label,
+          price: e.price,
+          risk,
+          rawRisk,
+          reward,
+          rewardFormula,
+          rrValue,
+          qty: e.qty,
+          stop,
+          exitedQtyForEntry: e.exitedQtyForEntry || 0,
+          openQtyForEntry: e.openQtyForEntry || 0,
+          isRiskFree
+        };
+      });
+
+      // Traditional weighted R:R (excluding risk-free positions)
+      const riskyEntries = entryBreakdown.filter(e => !e.isRiskFree);
+      const riskyQty = riskyEntries.reduce((sum, e) => sum + (e.qty || 0), 0);
+      const traditionalWeightedRR = riskyQty > 0
+        ? riskyEntries.reduce((sum, e) => sum + (e.rrValue * (e.qty || 0)), 0) / riskyQty
+        : 0;
+
+      // Effective position R:R (total reward vs total risk from risky portions only)
+      const totalRiskAmount = riskyEntries.reduce((sum, e) => sum + (e.risk * (e.qty || 0)), 0);
+      const totalRewardAmount = entryBreakdown.reduce((sum, e) => sum + (e.reward * (e.qty || 0)), 0);
+      const effectiveRR = totalRiskAmount > 0 ? Math.abs(totalRewardAmount / totalRiskAmount) : Infinity;
+
+      // Check if position contains risk-free components
+      const hasRiskFreePositions = entryBreakdown.some(e => e.isRiskFree);
+
+      const weightedRR = traditionalWeightedRR;
+
+      tradeTooltips.rewardRisk = {
+        entryBreakdown,
+        weightedRR,
+        totalQtyAll,
+        tsl,
+        traditionalWeightedRR,
+        effectiveRR,
+        hasRiskFreePositions,
+        totalRiskAmount,
+        totalRewardAmount
+      };
+
+      // Precompute trade details tooltip
+      const fieldsForTooltip = allColumns.slice(allColumns.findIndex(col => col.key === "initialQty")).filter(col => col.key !== 'openHeat');
+      const tradeDetailsFields = fieldsForTooltip.map(col => {
+        if (col.key === "actions") return null;
+        let value = trade[col.key as keyof Trade];
+        const originalValue = value; // Store original value for filtering
+
+        // Skip fields with no meaningful values BEFORE formatting
+        const shouldSkipField = (key: string, originalVal: any) => {
+          if (originalVal === null || originalVal === undefined || originalVal === '' || originalVal === '-') return true;
+
+          // Only hide EXACT zero values (not small decimals like 0.1, 0.01, 0.05)
+          // Check the original numeric value before any formatting
+          if (originalVal === 0 && [
+            'pyramid1Price', 'pyramid2Price', 'pyramid1Qty', 'pyramid2Qty',
+            'exit1Price', 'exit2Price', 'exit3Price', 'exit1Qty', 'exit2Qty', 'exit3Qty',
+            'tsl', 'rewardRisk', 'stockMove', 'pfImpact', 'cummPf', 'openHeat',
+            'unrealizedPL', 'realisedAmount', 'plRs'
+          ].includes(key)) return true;
+
+          if (key.includes('Date') && (originalVal === '-' || originalVal === '')) return true;
+          return false;
+        };
+
+        // Check if we should skip this field BEFORE any processing
+        if (shouldSkipField(col.key, originalValue)) return null;
+
+        // Handle accounting-aware calculations
+        if (col.key === 'unrealizedPL') {
+          if (trade.positionStatus === 'Open' || trade.positionStatus === 'Partial') {
+            value = calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell);
+          } else {
+            value = "-";
+          }
+        } else if (col.key === 'plRs') {
+          const tooltipValues = getAccountingAwareValues(trade);
+          value = tooltipValues.plRs;
+        } else if (col.key === 'realisedAmount') {
+          const tooltipValues = getAccountingAwareValues(trade);
+          value = tooltipValues.realisedAmount;
+        } else if (col.key === 'pfImpact') {
+          const tooltipValues = getAccountingAwareValues(trade);
+          value = tooltipValues.pfImpact;
+        } else if (col.key === 'cummPf') {
+          // The cummPf value is already calculated correctly based on accounting method in use-trades.ts
+          value = `${Number(trade.cummPf ?? 0).toFixed(2)}%`;
+        }
+
+        // Format values appropriately
+        if (["pyramid1Date", "pyramid2Date", "exit1Date", "exit2Date", "exit3Date"].includes(col.key)) {
+          value = value ? formatDate(value as string) : "-";
+        } else if (["entry", "avgEntry", "sl", "tsl", "cmp", "pyramid1Price", "pyramid2Price", "exit1Price", "exit2Price", "exit3Price", "avgExitPrice", "realisedAmount", "plRs", "unrealizedPL"].includes(col.key)) {
+          value = typeof value === 'number' ? formatCurrency(value) : value;
+        } else if (["pfImpact", "rewardRisk", "stockMove", "openHeat", "allocation", "slPercent"].includes(col.key)) {
+          if (col.key !== 'pfImpact' && col.key !== 'cummPf') {
+            let originalValue = Number(value);
+            if (col.key === "rewardRisk") {
+              value = originalValue > 0 ? `1:${originalValue.toFixed(2)} (${originalValue.toFixed(2)}R)` : '-';
+            } else {
+              value = `${originalValue.toFixed(2)}`;
+              if (!(col.key.includes("Price") || col.key.includes("Amount") || col.key.includes("Rs"))) {
+                 value += "%";
+              }
+            }
+          } else if (col.key === 'pfImpact') {
+            value = `${Number(value).toFixed(2)}%`;
+          }
+        } else if (col.key === "planFollowed") {
+          value = trade.planFollowed ? "Yes" : "No";
+        } else if (col.key === 'positionSize') {
+          value = typeof value === 'number' ? Math.round(value).toString() : value;
+        } else if (col.key === 'holdingDays') {
+          value = typeof value === 'number' ? `${value} day${value !== 1 ? 's' : ''}` : value;
+        } else if (value === undefined || value === null || value === ""){
+          value = "-";
+        }
+
+        return {
+          key: col.key,
+          label: col.label,
+          value: String(value)
+        };
+      }).filter(Boolean);
+
+      tradeTooltips.tradeDetails = {
+        fields: tradeDetailsFields,
+        tradeName: trade.name,
+        accountingMethod: useCashBasis ? 'Cash Basis' : 'Accrual Basis'
+      };
+
+      // Pre-compute stock move tooltip
+      const stockMoveEntries = [
+        { price: trade.entry, qty: trade.initialQty, description: 'Initial Entry' },
+        { price: trade.pyramid1Price, qty: trade.pyramid1Qty, description: 'Pyramid 1' },
+        { price: trade.pyramid2Price, qty: trade.pyramid2Qty, description: 'Pyramid 2' }
+      ].filter(e => e.price > 0 && e.qty > 0);
+
+      const individualMoves = calcIndividualMoves(
+        stockMoveEntries,
+        trade.cmp,
+        trade.avgExitPrice,
+        trade.positionStatus,
+        trade.buySell
+      );
+
+      tradeTooltips.stockMove = {
+        individualMoves,
+        positionStatus: trade.positionStatus
+      };
+
+      tooltipData.set(trade.id, tradeTooltips);
+    });
+
+    return tooltipData;
+  }, [items]);
+
+  // Render holding days with pre-computed data
+  const renderHoldingDays = (trade: Trade) => {
+    const tooltipData = precomputedTooltips.get(trade.id)?.holdingDays;
+    if (!tooltipData) return <div className="py-1 px-2">-</div>;
+
+    const { displayDays, lotBreakdown, isOpenPosition, isPartialPosition } = tooltipData;
+
+    let tooltipContent;
+    if (isOpenPosition) {
+      tooltipContent = (
+        <div className="flex flex-col gap-1 text-xs max-w-xs min-w-[120px]">
+          <div className="font-semibold">Holding Days</div>
+          {lotBreakdown.filter((l: any) => !l.exited).map((l: any, idx: number) => (
+            <div key={idx} className="flex justify-between">
+              <span>{l.label}</span>
+              <span className="font-mono">{l.days} day{l.days !== 1 ? 's' : ''}</span>
+            </div>
+          ))}
+          <div className="text-foreground-500 mt-1 text-[10px]">
+            Days since entry for each open lot.
+          </div>
+        </div>
+      );
+    } else if (isPartialPosition) {
+      tooltipContent = (
+        <div className="flex flex-col gap-1 text-xs max-w-xs min-w-[120px]">
+          <div className="font-semibold">Holding Days</div>
+          {lotBreakdown.map((l: any, idx: number) => (
+            <div key={idx} className="flex justify-between">
+              <span>{l.label} {l.exited ? '(sold)' : '(open)'}</span>
+              <span className="font-mono">{l.days} day{l.days !== 1 ? 's' : ''}</span>
+            </div>
+          ))}
+          <div className="text-foreground-500 mt-1 text-[10px]">
+            Days since entry for open lots, entry to exit for sold lots (FIFO).
+          </div>
+        </div>
+      );
+    } else {
+      tooltipContent = (
+        <div className="flex flex-col gap-1 text-xs max-w-xs min-w-[120px]">
+          <div className="font-semibold">Holding Days</div>
+          {lotBreakdown.map((l: any, idx: number) => (
+            <div key={idx} className="flex justify-between">
+              <span>{l.label}</span>
+              <span className="font-mono">{l.days} day{l.days !== 1 ? 's' : ''}</span>
+            </div>
+          ))}
+          <div className="text-foreground-500 mt-1 text-[10px]">
+            Entry to exit for each lot (FIFO).
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <Tooltip
+        content={tooltipContent}
+        placement="top"
+        delay={100}
+        closeDelay={50}
+        radius="sm"
+        shadow="md"
+        classNames={{ content: "bg-content1 border border-divider z-50 max-w-xs" }}
+      >
+        <div className={`py-1 px-2 flex items-center gap-0.5${isOpenPosition ? ' text-warning' : ''} relative`}>
+          {displayDays}
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-circle text-warning cursor-help" style={{marginLeft: 2}}>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </div>
+      </Tooltip>
+    );
+  };
+
   const renderCell = React.useCallback((trade: Trade, columnKey: string) => {
     const cellValue = trade[columnKey as keyof Trade];
 
-    // Handle holding days display with detailed tooltip
-    if (columnKey === 'holdingDays') {
-      const displayDays = trade.holdingDays || 0;
-      const isOpen = trade.positionStatus === 'Open';
 
-      // Create detailed holding days tooltip
-      const entryDate = trade.date ? new Date(trade.date) : null;
-      const exitDates = [trade.exit1Date, trade.exit2Date, trade.exit3Date].filter(Boolean);
-      const pyramidDates = [trade.pyramid1Date, trade.pyramid2Date].filter(Boolean);
 
-      const holdingDaysTooltip = (
-        <div className="p-2 text-xs max-w-xs">
-          <div className="font-semibold mb-1">Holding Days Calculation:</div>
-          <p className="mb-1">Days between entry and exit (or current date for open positions)</p>
-          {entryDate && (
-            <div className="space-y-1">
-              <p><b>Entry Date:</b> {entryDate.toLocaleDateString()}</p>
-              {exitDates.length > 0 ? (
-                <div>
-                  <b>Exit Dates:</b>
-                  {exitDates.map((date, idx) => (
-                    <div key={idx} className="ml-2">• {new Date(date).toLocaleDateString()}</div>
-                  ))}
-                </div>
-              ) : (
-                <p><b>Status:</b> {isOpen ? 'Still Open' : 'Closed'}</p>
-              )}
-              {pyramidDates.length > 0 && (
-                <div>
-                  <b>Pyramid Dates:</b>
-                  {pyramidDates.map((date, idx) => (
-                    <div key={idx} className="ml-2">• {new Date(date).toLocaleDateString()}</div>
-                  ))}
-                </div>
-              )}
+    // Trade details tooltip for stock name (precomputed)
+    if (columnKey === 'name') {
+      const tooltipData = precomputedTooltips.get(trade.id)?.tradeDetails;
+      if (!tooltipData) {
+        return (
+          <div className="cursor-help" data-trade-id={trade.id} data-field="name" tabIndex={0}>
+            <NameCell
+              key={`${trade.id}-name`}
+              value={trade.name}
+              onSave={(value) => handleInlineEditSave(trade.id, 'name', value)}
+            />
+          </div>
+        );
+      }
+
+      const { fields, tradeName, accountingMethod } = tooltipData;
+      const tooltipContent = (
+        <div className="p-3 text-xs max-w-2xl break-words">
+          <div className="flex justify-between items-center mb-2">
+            <h4 className="font-semibold text-sm">Trade Details: {tradeName}</h4>
+            <div className="text-xs px-2 py-1 rounded bg-primary/20 text-primary">
+              {accountingMethod}
             </div>
-          )}
-        </div>
-      );
-
-      return (
-        <div className="flex items-center gap-1">
-          <span className={`py-1 px-2 ${isOpen ? 'text-warning' : ''}`}>
-            {displayDays}
-          </span>
-          <Tooltip
-            content={holdingDaysTooltip}
-            placement="right"
-            classNames={{
-              base: "py-1 px-2 shadow-soft-xl backdrop-blur-xl bg-background/80 dark:bg-background/40 border border-foreground-200/20",
-              content: "text-foreground-700 dark:text-foreground-300"
-            }}
-          >
-            <Icon icon="lucide:alert-circle" className="w-4 h-4 text-warning-500 cursor-help" />
-          </Tooltip>
-        </div>
-      );
-    }
-
-    // Detailed Reward:Risk display with tooltip
-    if (columnKey === 'rewardRisk') {
-      const rrValue = trade.rewardRisk || 0;
-      const formatRR = (value: number) => value > 0 ? `1:${value.toFixed(2)}` : '-';
-
-      // Create detailed R:R tooltip
-      const rrTooltip = (
-        <div className="p-2 text-xs max-w-xs">
-          <div className="font-semibold mb-1">Reward:Risk (R:R) Calculation:</div>
-          <p className="mb-1">Indicates the ratio of potential/actual reward to the initial risk taken.</p>
-          <p className="mb-0.5"><b>Risk (per share):</b> Absolute difference between Entry Price and Stop Loss (SL).</p>
-          <div className="font-medium mt-1">Reward Basis (per share):</div>
-          {trade.positionStatus === 'Open' && <p className="ml-2 text-[11px]">Potential: Current Market Price (CMP) - Entry Price</p>}
-          {trade.positionStatus === 'Closed' && <p className="ml-2 text-[11px]">Actual: Average Exit Price - Entry Price</p>}
-          {trade.positionStatus === 'Partial' && (
-            <div className="ml-2 text-[11px]">
-              <p>Weighted Average:</p>
-              <p>• Realized: (Avg Exit - Entry) × Exited Qty</p>
-              <p>• Potential: (CMP - Entry) × Open Qty</p>
-            </div>
-          )}
-          <div className="mt-2 p-1 bg-content2 rounded">
-            <p className="font-medium">Current R:R: {formatRR(rrValue)}</p>
-            {rrValue > 0 && <p className="text-[10px] text-foreground-500">({rrValue.toFixed(2)}R)</p>}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            {fields.map((field: any) => (
+              <div key={field.key} className="bg-content2/40 dark:bg-content2/30 p-1.5 rounded shadow-sm overflow-hidden text-ellipsis whitespace-nowrap">
+                <span className="font-medium text-default-700 dark:text-default-300">{field.label}: </span>
+                <span className="text-default-600 dark:text-default-400 whitespace-nowrap">{field.value}</span>
+              </div>
+            ))}
           </div>
         </div>
       );
 
       return (
-        <div className="flex items-center gap-1">
-          <span className="py-1 px-2">
-            {formatRR(rrValue)}
-          </span>
-          <Tooltip
-            content={rrTooltip}
-            placement="right"
-            classNames={{
-              base: "py-1 px-2 shadow-soft-xl backdrop-blur-xl bg-background/80 dark:bg-background/40 border border-foreground-200/20",
-              content: "text-foreground-700 dark:text-foreground-300"
-            }}
-          >
-            <Icon icon="lucide:alert-circle" className="w-4 h-4 text-warning-500 cursor-help" />
-          </Tooltip>
-        </div>
+        <Tooltip
+          content={tooltipContent}
+          placement="right-start"
+          delay={0}
+          closeDelay={0}
+          radius="sm"
+          shadow="md"
+          classNames={{ content: "bg-content1 border border-divider" }}
+        >
+          <div className="cursor-help" data-trade-id={trade.id} data-field="name" tabIndex={0}>
+            <NameCell
+              key={`${trade.id}-name`}
+              value={trade.name}
+              onSave={(value) => handleInlineEditSave(trade.id, 'name', value)}
+            />
+          </div>
+        </Tooltip>
       );
     }
 
-    // Detailed Stock Move display with tooltip
-    if (columnKey === 'stockMove') {
-      const stockMoveValue = trade.stockMove || 0;
-      const formatPercentage = (value: number) => `${value.toFixed(2)}%`;
+    // Format holding days with lazy tooltip calculation
+    if (columnKey === 'holdingDays') {
+      return renderHoldingDays(trade);
+    }
 
-      // Create detailed stock move tooltip
-      const entry = trade.avgEntry || trade.entry || 0;
-      const cmp = trade.cmp || 0;
-      const avgExit = trade.avgExitPrice || 0;
-      const isBuy = trade.buySell === 'Buy';
+    // Tooltip for Reward:Risk (R:R) with pre-computed data
+    if (columnKey === 'rewardRisk') {
+      const tooltipData = precomputedTooltips.get(trade.id)?.rewardRisk;
+      if (!tooltipData) {
+        return <div className="py-1 px-2">-</div>;
+      }
 
-      const stockMoveTooltip = (
-        <div className="p-2 text-xs max-w-xs">
-          <div className="font-semibold mb-1">Stock Move Calculation:</div>
-          <p className="mb-1">Percentage change in stock price from entry to current/exit price.</p>
+      const {
+        entryBreakdown,
+        weightedRR,
+        totalQtyAll,
+        tsl,
+        traditionalWeightedRR,
+        effectiveRR,
+        hasRiskFreePositions,
+        totalRiskAmount,
+        totalRewardAmount
+      } = tooltipData;
+      const weightedRRDisplay = totalQtyAll > 0 ? weightedRR.toFixed(2) : '0.00';
+
+      const rrTooltipContent = (
+        <div className="flex flex-col gap-1 text-xs max-w-xs min-w-[180px]">
+          <div className="font-semibold">Reward:Risk Breakdown</div>
+          {entryBreakdown.map((e: any, idx: number) => (
+            <div key={idx} className="flex flex-col gap-0.5 border-b border-divider pb-1 mb-1 last:border-0 last:pb-0 last:mb-0">
+              <div className="font-medium">{e.label} (Entry: {e.price})</div>
+              {trade.positionStatus === 'Partial' && (e.exitedQtyForEntry > 0 || e.openQtyForEntry > 0) && (
+                <div className="text-[10px] text-foreground-600">
+                  {e.exitedQtyForEntry > 0 && `Exited: ${e.exitedQtyForEntry} qty`}
+                  {e.exitedQtyForEntry > 0 && e.openQtyForEntry > 0 && ' | '}
+                  {e.openQtyForEntry > 0 && `Open: ${e.openQtyForEntry} qty`}
+                </div>
+              )}
+              <div><b>Risk:</b> |{trade.buySell === 'Buy' ? 'Entry - ' : ''}{(e.label === 'Initial Entry' ? 'SL' : (e.stop === tsl && tsl > 0 ? 'TSL' : 'SL'))}{trade.buySell === 'Sell' ? ' - Entry' : ''}| = {trade.buySell === 'Buy' ? `${e.price} - ${e.stop}` : `${e.stop} - ${e.price}`} = {e.rawRisk.toFixed(2)}</div>
+              {e.rawRisk < 0 && e.label !== 'Initial Entry' && (
+                <div className="text-warning-600 text-[10px]">
+                  Negative risk: This pyramid is financed from the cushion of earlier profits.
+                </div>
+              )}
+              <div><b>Reward:</b> {e.rewardFormula}</div>
+              <div><b>R:R:</b> |{e.reward.toFixed(2)} / {e.risk.toFixed(2)}| = <span className={`${e.isRiskFree ? 'text-success font-bold' : 'text-primary'}`}>
+                {e.isRiskFree ? '∞ (Risk-Free)' : e.rrValue.toFixed(2)}
+              </span></div>
+            </div>
+          ))}
+          <div className="font-semibold mt-1 border-t border-divider pt-1">Overall R:R Analysis</div>
+
+          {hasRiskFreePositions && (
+            <div className="bg-success-50 dark:bg-success-900/20 p-2 rounded text-[10px] mb-2">
+              <div className="font-semibold text-success-700 dark:text-success-300">🎯 Position Contains Risk-Free Components!</div>
+              <div className="text-success-600 dark:text-success-400">Some entries have zero risk (TSL at entry price)</div>
+            </div>
+          )}
 
           <div className="space-y-1">
-            <p><b>Entry Price:</b> ₹{entry.toFixed(2)}</p>
-            {trade.positionStatus === 'Open' && (
-              <>
-                <p><b>Current Price (CMP):</b> ₹{cmp.toFixed(2)}</p>
-                <p><b>Calculation:</b> {isBuy ? '(CMP - Entry)' : '(Entry - CMP)'} / Entry × 100</p>
-                <p><b>Formula:</b> ({isBuy ? cmp.toFixed(2) : entry.toFixed(2)} - {isBuy ? entry.toFixed(2) : cmp.toFixed(2)}) / {entry.toFixed(2)} × 100</p>
-              </>
-            )}
-            {trade.positionStatus === 'Closed' && avgExit > 0 && (
-              <>
-                <p><b>Average Exit Price:</b> ₹{avgExit.toFixed(2)}</p>
-                <p><b>Calculation:</b> {isBuy ? '(Avg Exit - Entry)' : '(Entry - Avg Exit)'} / Entry × 100</p>
-                <p><b>Formula:</b> ({isBuy ? avgExit.toFixed(2) : entry.toFixed(2)} - {isBuy ? entry.toFixed(2) : avgExit.toFixed(2)}) / {entry.toFixed(2)} × 100</p>
-              </>
-            )}
-            {trade.positionStatus === 'Partial' && (
-              <>
-                <p><b>Current Price (CMP):</b> ₹{cmp.toFixed(2)}</p>
-                <p><b>Average Exit Price:</b> ₹{avgExit.toFixed(2)}</p>
-                <p><b>Calculation:</b> Weighted average of realized and unrealized moves</p>
-              </>
+            <div>
+              <b>Traditional Weighted R:R:</b> <span className='text-primary'>{traditionalWeightedRR.toFixed(2)}</span>
+              <div className="text-[10px] text-foreground-500">
+                (Excludes risk-free positions from calculation)
+              </div>
+            </div>
+
+            <div>
+              <b>Effective Position R:R:</b> <span className={`${effectiveRR === Infinity ? 'text-success font-bold' : 'text-primary'}`}>
+                {effectiveRR === Infinity ? '∞ (Risk-Free Position)' : effectiveRR.toFixed(2)}
+              </span>
+              <div className="text-[10px] text-foreground-500">
+                Total Reward (₹{Math.abs(totalRewardAmount).toFixed(2)}) ÷ Total Risk (₹{totalRiskAmount.toFixed(2)})
+              </div>
+            </div>
+
+            {hasRiskFreePositions && (
+              <div className="text-[10px] text-warning-600 dark:text-warning-400 mt-1">
+                💡 Risk-free positions provide unlimited upside with zero additional downside risk
+              </div>
             )}
           </div>
+          {tooltipData && (
+            <div className="text-foreground-500 mt-1 text-[10px] border-t border-divider pt-1">
+              {trade.positionStatus === 'Open' && '* All rewards are unrealized (based on current CMP)'}
+              {trade.positionStatus === 'Closed' && '* All rewards are realized (based on actual exit prices)'}
+              {trade.positionStatus === 'Partial' && '* FIFO-based: Realized rewards for exited qty per entry, unrealized for remaining qty'}
+            </div>
+          )}
+        </div>
+      );
 
-          <div className="mt-2 p-1 bg-content2 rounded">
-            <p className="font-medium">Stock Move: {formatPercentage(stockMoveValue)}</p>
-            <p className="text-[10px] text-foreground-500">
-              {stockMoveValue > 0 ? 'Favorable' : stockMoveValue < 0 ? 'Unfavorable' : 'Neutral'} move
-            </p>
+      return (
+        <Tooltip
+          content={rrTooltipContent}
+          placement="top"
+          delay={100}
+          closeDelay={50}
+          radius="sm"
+          shadow="md"
+          classNames={{ content: "bg-content1 border border-divider z-50 max-w-xs" }}
+        >
+          <div className="py-1 px-2 flex items-center gap-1 relative">
+            {hasRiskFreePositions && effectiveRR === Infinity ? (
+              <span className="text-success font-bold">∞ (Risk-Free)</span>
+            ) : weightedRR > 0 ? (
+              `1:${weightedRR.toFixed(2)} (${weightedRR.toFixed(2)}R)`
+            ) : '-'}
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-circle text-warning cursor-help" style={{marginLeft: 2}}>
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+        </Tooltip>
+      );
+    }
+
+    // Tooltip for Stock Move (%) with pre-computed data
+    if (columnKey === 'stockMove') {
+      const tooltipData = precomputedTooltips.get(trade.id)?.stockMove;
+      if (!tooltipData) {
+        return <div className="py-1 px-2">-</div>;
+      }
+
+      const { individualMoves, positionStatus } = tooltipData;
+      const formatPercentage = (value: number | null | undefined): string => {
+        if (value === null || value === undefined) return "-";
+        return `${value.toFixed(2)}%`;
+      };
+
+      const tooltipContent = (
+        <div className="flex flex-col gap-1 text-xs max-w-xs min-w-[180px]">
+          <div className="font-semibold">Individual Stock Moves:</div>
+          {individualMoves.map((move: any, index: number) => (
+            <div key={index} className="flex justify-between">
+              <span>{move.description} <span className="text-foreground-400">({move.qty} qty)</span></span>
+              <span className="font-mono">{formatPercentage(move.movePercent)}</span>
+            </div>
+          ))}
+          <div className="text-foreground-500 mt-1 text-[10px]">
+            {positionStatus === 'Open'
+              ? '* Unrealized moves based on CMP vs. entry prices.'
+              : positionStatus === 'Partial'
+                ? '* Mixed moves: Realized (Avg. Exit) for exited qty, Unrealized (CMP) for open qty.'
+                : '* Realized moves based on Avg. Exit vs. entry prices.'}
           </div>
         </div>
       );
 
       return (
-        <div className="flex items-center gap-1">
-          <span className="py-1 px-2">
-            {formatPercentage(stockMoveValue)}
-          </span>
-          <Tooltip
-            content={stockMoveTooltip}
-            placement="right"
-            classNames={{
-              base: "py-1 px-2 shadow-soft-xl backdrop-blur-xl bg-background/80 dark:bg-background/40 border border-foreground-200/20",
-              content: "text-foreground-700 dark:text-foreground-300"
-            }}
-          >
-            <Icon icon="lucide:alert-circle" className="w-4 h-4 text-warning-500 cursor-help" />
-          </Tooltip>
-        </div>
+        <Tooltip
+          content={tooltipContent}
+          placement="top"
+          delay={100}
+          closeDelay={50}
+          radius="sm"
+          shadow="md"
+          classNames={{ content: "bg-content1 border border-divider z-50 max-w-xs" }}
+        >
+          <div className="py-1 px-2 flex items-center gap-1 relative">
+            {trade.stockMove !== undefined && trade.stockMove !== null ? `${Number(trade.stockMove).toFixed(2)}%` : '-'}
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-alert-circle text-warning cursor-help" style={{marginLeft: 2}}>
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+        </Tooltip>
       );
     }
 
 
+
+    // Special handling for accounting-aware fields BEFORE non-editable check
+    if (columnKey === "plRs" || columnKey === "realisedAmount") {
+      // CRITICAL FIX: Always calculate P/L properly using getAccountingAwareValues
+      const accountingValues = getAccountingAwareValues(trade);
+      const displayValue = columnKey === "realisedAmount" ? accountingValues.realisedAmount : accountingValues.plRs;
+
+      return (
+        <div className={`py-1 px-2 text-right whitespace-nowrap ${getValueColor(displayValue, columnKey)}`}>
+          {formatCellValue(displayValue, columnKey)}
+        </div>
+      );
+    }
 
     // Skip rendering for non-editable fields
     if (!isEditable(columnKey)) {
@@ -880,313 +1767,218 @@ export const TradeJournal = React.memo(function TradeJournal({
     // Handle special cell types
     if (columnKey === 'buySell') {
       return (
-        <BuySellCell 
-          value={trade.buySell} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'buySell', value)} 
-        />
-      );
-    }
-
-    if (columnKey === 'positionStatus') {
-      return (
-        <PositionStatusCell 
-          value={trade.positionStatus} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'positionStatus', value)} 
-        />
-      );
-    }
-
-    if (columnKey === 'name') {
-      // Simplified name cell without heavy tooltip calculations
-      return (
-        <div className="max-w-[200px] cursor-default">
-          <NameCell
-            value={trade.name}
-            onSave={(value) => handleInlineEditSave(trade.id, "name", value)}
+        <div
+          data-trade-id={trade.id}
+          data-field="buySell"
+          tabIndex={0}
+          className="focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded"
+        >
+          <BuySellCell
+            key={`${trade.id}-buySell`}
+            value={trade.buySell}
+            onSave={(value) => handleInlineEditSave(trade.id, 'buySell', value)}
           />
         </div>
       );
     }
 
+    if (columnKey === 'positionStatus') {
+      return (
+        <div
+          data-trade-id={trade.id}
+          data-field="positionStatus"
+          tabIndex={0}
+          className="focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded"
+        >
+          <PositionStatusCell
+            key={`${trade.id}-positionStatus`}
+            value={trade.positionStatus}
+            onSave={(value) => handleInlineEditSave(trade.id, 'positionStatus', value)}
+          />
+        </div>
+      );
+    }
+
+
+
     if (columnKey === 'setup') {
       return (
-        <SetupCell 
-          value={trade.setup || ''} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'setup', value)} 
-        />
+        <div
+          data-trade-id={trade.id}
+          data-field="setup"
+          tabIndex={0}
+          className="focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 rounded"
+        >
+          <SetupCell
+            key={`${trade.id}-setup`}
+            value={trade.setup || ''}
+            onSave={(value) => handleInlineEditSave(trade.id, 'setup', value)}
+          />
+        </div>
       );
     }
 
     if (columnKey === 'exitTrigger') {
       return (
-        <ExitTriggerCell 
-          value={trade.exitTrigger || ''} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'exitTrigger', value)} 
-        />
+        <div data-trade-id={trade.id} data-field="exitTrigger" tabIndex={0}>
+          <ExitTriggerCell
+            key={`${trade.id}-exitTrigger`}
+            value={trade.exitTrigger || ''}
+            onSave={(value) => handleInlineEditSave(trade.id, 'exitTrigger', value)}
+          />
+        </div>
       );
     }
 
     if (columnKey === 'proficiencyGrowthAreas') {
       return (
-        <ProficiencyGrowthAreasCell 
-          value={trade.proficiencyGrowthAreas || ''} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'proficiencyGrowthAreas', value)} 
-        />
+        <div data-trade-id={trade.id} data-field="proficiencyGrowthAreas" tabIndex={0}>
+          <ProficiencyGrowthAreasCell
+            key={`${trade.id}-proficiencyGrowthAreas`}
+            value={trade.proficiencyGrowthAreas || ''}
+            onSave={(value) => handleInlineEditSave(trade.id, 'proficiencyGrowthAreas', value)}
+          />
+        </div>
       );
     }
 
     if (columnKey === 'planFollowed') {
       return (
-        <PlanFollowedCell 
-          value={trade.planFollowed} 
-          onSave={(value) => handleInlineEditSave(trade.id, 'planFollowed', value)} 
-        />
+        <div data-trade-id={trade.id} data-field="planFollowed" tabIndex={0}>
+          <PlanFollowedCell
+            key={`${trade.id}-planFollowed`}
+            value={trade.planFollowed}
+            onSave={(value) => handleInlineEditSave(trade.id, 'planFollowed', value)}
+          />
+        </div>
       );
     }
 
     if (columnKey === 'notes') {
       return (
-        <NotesCell
-          value={trade.notes || ''}
-          onSave={(value) => handleInlineEditSave(trade.id, 'notes', value)}
-        />
+        <div data-trade-id={trade.id} data-field="notes" tabIndex={0}>
+          <NotesCell
+            key={`${trade.id}-notes`}
+            value={trade.notes || ''}
+            onSave={(value) => handleInlineEditSave(trade.id, 'notes', value)}
+          />
+        </div>
       );
     }
 
     switch (columnKey) {
-      // Text fields - only allow editing non-required fields
-      case "exitTrigger":
-      case "proficiencyGrowthAreas":
-      case "baseDuration":
-      case "pyramid1Date":
-      case "pyramid2Date":
-      case "exit1Date":
-      case "exit2Date":
-      case "exit3Date":
-        return (
-          <EditableCell
-            value={cellValue as string}
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-            type="date"
-          />
-        );
-        
       // Trade number (editable)
       case "tradeNo":
         return (
-          <EditableCell 
-            value={cellValue as string} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} 
-          />
-        );
-        
-      // Date field (editable with date picker)
-      case "date":
-        return (
-          <EditableCell 
-            value={cellValue as string} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-            type="date"
-          />
-        );
-        
-      // Stock/Asset Name (editable)
-      case "name":
-        return (
           <EditableCell
+            key={`${trade.id}-${columnKey}`}
             value={cellValue as string}
             onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-          />
-        );
-        
-      // Exit Trigger field (editable with dropdown)
-      case "exitTrigger":
-        return (
-          <EditableCell 
-            value={cellValue as string} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-            type="select"
-            options={[
-              "Breakeven exit",
-              "Market Pressure",
-              "R multiples",
-              "Random",
-              "SL",
-              "Target",
-              "Trailing SL"
-            ]}
-          />
-        );
-        
-      // Setup field (editable with dropdown)
-      case "setup":
-        return (
-          <SetupCell 
-            value={cellValue as string} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-          />
-        );
-        
-      // Proficiency Growth Areas field (editable with dropdown)
-      case "proficiencyGrowthAreas":
-        return (
-          <EditableCell 
-            value={cellValue as string} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-          />
-        );
-        
-      // Entry and SL fields (editable)
-      case "entry":
-      case "sl":
-        return (
-          <EditableCell 
-            value={cellValue as number} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} 
-            type="price"
-          />
-        );
-        
-      // CMP field with special handling for auto-fetch vs manual entry
-      case "cmp":
-        return (
-          <CMPCell
-            value={cellValue as number}
-            isAutoFetched={trade._cmpAutoFetched}
-            onSave={(value) => handleInlineEditSave(trade.id, "cmp", value)}
+            tradeId={trade.id}
+            field={columnKey}
           />
         );
 
-      // Other price fields
-      case "tsl":
-      case "pyramid1Price":
-      case "pyramid2Price":
-      case "exit1Price":
-      case "exit2Price":
-      case "exit3Price":
-      case "avgEntry":
-      case "avgExitPrice":
-      case "positionSize":
-      case "realisedAmount":
-      case "plRs":
-        return (
-          <EditableCell
-            value={cellValue as number}
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)}
-            type="price"
-            colorValue={columnKey === 'plRs'}
-          />
-        );
-        
-      // Number fields with percentage
-      case "slPercent":
-      case "openHeat":
-      case "allocation":
-      case "pfImpact":
-      case "cummPf":
-      case "stockMove":
-      case "rewardRisk":
-        return (
-          <EditableCell 
-            value={cellValue as number} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} 
-            type="number"
-          />
-        );
-        
-      // Quantity fields - only pyramid and exit quantities are editable
-      case "pyramid1Qty":
-      case "pyramid2Qty":
-      case "exit1Qty":
-      case "exit2Qty":
-      case "exit3Qty":
-      case "initialQty":
-        return (
-          <EditableCell 
-            value={cellValue as number} 
-            onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} 
-            type="number"
-            min={0}
-          />
-        );
-        
-      // Non-editable quantity fields
-      case "openQty":
-      case "exitedQty":
-      case "holdingDays":
-        return (
-          <div className="py-1 px-2 text-right">
-            {formatCellValue(cellValue, columnKey)}
-          </div>
-        );
+
+      // Date fields - editable
       case "date":
       case "pyramid1Date":
       case "pyramid2Date":
       case "exit1Date":
       case "exit2Date":
       case "exit3Date":
-        return <EditableCell value={cellValue as string} type="date" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        return <EditableCell key={`${trade.id}-${columnKey}`} value={cellValue as string} type="date" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} tradeId={trade.id} field={columnKey} />;
+
+      // Price fields - check if editable
       case "entry":
-      case "avgEntry":
       case "sl":
       case "tsl":
-      case "cmp":
       case "pyramid1Price":
       case "pyramid2Price":
       case "exit1Price":
       case "exit2Price":
       case "exit3Price":
+        return <EditableCell key={`${trade.id}-${columnKey}`} value={cellValue as number} type="price" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} tradeId={trade.id} field={columnKey} />;
+
+      // Non-editable calculated price fields
+      case "avgEntry":
       case "avgExitPrice":
-        return <EditableCell value={cellValue as number} type="price" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        return (
+          <div className="py-1 px-2 text-right whitespace-nowrap">
+            {formatCellValue(cellValue, columnKey)}
+          </div>
+        );
+      // Non-editable calculated fields (these cases should not be reached due to special handling above)
       case "realisedAmount":
       case "plRs":
+        // This case should not be reached due to special handling before non-editable check
         const accountingValues = getAccountingAwareValues(trade);
         const displayValue = columnKey === "realisedAmount" ? accountingValues.realisedAmount : accountingValues.plRs;
         return (
-          <div className={`py-1 px-2 text-right ${getValueColor(displayValue, columnKey)}`}>
+          <div className={`py-1 px-2 text-right whitespace-nowrap ${getValueColor(displayValue, columnKey)}`}>
             {formatCellValue(displayValue, columnKey)}
           </div>
         );
+
+      // Quantity fields - editable
       case "initialQty":
       case "pyramid1Qty":
       case "pyramid2Qty":
-      case "positionSize":
       case "exit1Qty":
       case "exit2Qty":
       case "exit3Qty":
+        return <EditableCell key={`${trade.id}-${columnKey}`} value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} tradeId={trade.id} field={columnKey} />;
+
+      // Non-editable calculated quantity fields
+      case "positionSize":
       case "openQty":
       case "exitedQty":
       case "holdingDays":
-        return <EditableCell value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        return (
+          <div className="py-1 px-2 text-right whitespace-nowrap">
+            {formatCellValue(cellValue, columnKey)}
+          </div>
+        );
+
+      // Non-editable calculated percentage fields
       case "allocation":
       case "stockMove":
       case "openHeat":
-        return <EditableCell value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        return (
+          <div className="py-1 px-2 text-right whitespace-nowrap">
+            {formatCellValue(cellValue, columnKey)}
+          </div>
+        );
       case "pfImpact":
         const pfImpactValues = getAccountingAwareValues(trade);
         return (
-          <div className="py-1 px-2 text-right">
+          <div className="py-1 px-2 text-right whitespace-nowrap">
             {formatCellValue(pfImpactValues.pfImpact, columnKey)}
           </div>
         );
       case "cummPf":
         return (
-          <div className="py-1 px-2 text-right">
+          <div className="py-1 px-2 text-right whitespace-nowrap">
             {formatCellValue(cellValue, columnKey)}
           </div>
         );
+      // Non-editable calculated reward:risk field
       case "rewardRisk":
-        return <EditableCell value={cellValue as number} type="number" onSave={(value) => handleInlineEditSave(trade.id, columnKey as keyof Trade, value)} />;
+        return (
+          <div className="py-1 px-2 text-right whitespace-nowrap">
+            {formatCellValue(cellValue, columnKey)}
+          </div>
+        );
       case "buySell":
-        return <BuySellCell value={trade.buySell} onSave={(value) => handleInlineEditSave(trade.id, "buySell", value)} />;
+        return <BuySellCell key={`${trade.id}-buySell`} value={trade.buySell} onSave={(value) => handleInlineEditSave(trade.id, "buySell", value)} />;
       case "positionStatus":
-        return <PositionStatusCell value={trade.positionStatus} onSave={(value) => handleInlineEditSave(trade.id, "positionStatus", value)} />;
+        return <PositionStatusCell key={`${trade.id}-positionStatus`} value={trade.positionStatus} onSave={(value) => handleInlineEditSave(trade.id, "positionStatus", value)} />;
       case "planFollowed":
-        return <PlanFollowedCell value={trade.planFollowed} onSave={(value) => handleInlineEditSave(trade.id, "planFollowed", value)} />;
+        return <PlanFollowedCell key={`${trade.id}-planFollowed`} value={trade.planFollowed} onSave={(value) => handleInlineEditSave(trade.id, "planFollowed", value)} />;
       case "slPercent":
         const slPercent = calcSLPercent(trade.sl, trade.entry);
         return (
-          <div className="text-right font-medium text-small">
+          <div className="text-right font-medium text-small whitespace-nowrap">
             {slPercent > 0 ? `${slPercent.toFixed(2)}%` : "-"}
           </div>
         );
@@ -1208,22 +2000,23 @@ export const TradeJournal = React.memo(function TradeJournal({
       case 'unrealizedPL':
         if (trade.positionStatus === 'Open' || trade.positionStatus === 'Partial') {
           return (
-            <div className="py-1 px-2 text-right">
+            <div className="py-1 px-2 text-right whitespace-nowrap">
               {formatCellValue(calcUnrealizedPL(trade.avgEntry, trade.cmp, trade.openQty, trade.buySell), 'plRs')}
             </div>
           );
         } else {
-          return <div className="py-1 px-2 text-right">-</div>;
+          return <div className="py-1 px-2 text-right whitespace-nowrap">-</div>;
         }
       case 'openHeat':
         return (
-          <div className="py-1 px-2 text-right">
+          <div className="py-1 px-2 text-right whitespace-nowrap">
             {calcTradeOpenHeat(trade, portfolioSize, getPortfolioSize).toFixed(2)}%
           </div>
         );
       case 'notes':
         return (
           <NotesCell
+            key={`${trade.id}-notes`}
             value={trade.notes || ''}
             onSave={(value) => handleInlineEditSave(trade.id, 'notes', value)}
           />
@@ -1258,8 +2051,8 @@ export const TradeJournal = React.memo(function TradeJournal({
       };
     }
 
-    // Use trades for stats calculation (they are already properly filtered and expanded by useTrades hook)
-    const tradesForStats = trades;
+    // CRITICAL FIX: Use processedTrades for stats calculation to include local updates
+    const tradesForStats = processedTrades;
 
     // Debug: Check dataset consistency (ALWAYS LOG)
     if (process.env.NODE_ENV === 'development') {
@@ -1369,7 +2162,13 @@ export const TradeJournal = React.memo(function TradeJournal({
       }
     }
 
-    const realizedImpact = portfolioSize > 0 ? (realizedPL / portfolioSize) * 100 : 0;
+    // Calculate realized PF Impact using accounting-aware portfolio sizes (same as tooltip)
+    const realizedImpact = realizedTrades.reduce((sum, trade) => {
+      const pfImpact = useCashBasis
+        ? (trade._cashPfImpact ?? 0)
+        : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+      return sum + pfImpact;
+    }, 0);
 
     // Calculate open heat using filtered trades to respond to search
     // For cash basis, avoid double counting by using original trade IDs
@@ -1389,21 +2188,59 @@ export const TradeJournal = React.memo(function TradeJournal({
     const openHeat = calcOpenHeat(filteredTradesForOpenHeat, portfolioSize, getPortfolioSize);
 
     // Calculate win rate using processed trades for cash basis
-    const tradesWithAccountingPL = tradesForStats
-      .filter(trade => {
-        if (useCashBasis) {
-          // For cash basis: include expanded trades OR original closed/partial trades
-          return trade._cashBasisExit || trade.positionStatus !== 'Open';
-        }
-        // For accrual basis: count all non-open trades
-        return trade.positionStatus !== 'Open';
-      })
-      .map(trade => ({
-        ...trade,
-        accountingPL: calculateTradePL(trade, useCashBasis)
-      }));
+    let tradesWithAccountingPL;
+
+    if (useCashBasis) {
+      // For cash basis: Group trades by original ID and calculate total P/L per original trade
+      const tradeGroups = new Map<string, Trade[]>();
+
+      tradesForStats
+        .filter(trade => trade._cashBasisExit || trade.positionStatus !== 'Open')
+        .forEach(trade => {
+          const originalId = trade.id.split('_exit_')[0];
+          if (!tradeGroups.has(originalId)) {
+            tradeGroups.set(originalId, []);
+          }
+          tradeGroups.get(originalId)!.push(trade);
+        });
+
+      // Calculate total P/L for each original trade
+      tradesWithAccountingPL = Array.from(tradeGroups.entries()).map(([originalId, trades]) => {
+        // Sum up P/L from all exits for this trade
+        const totalPL = trades.reduce((sum, trade) => {
+          return sum + calculateTradePL(trade, useCashBasis);
+        }, 0);
+
+        // Use the first trade as the representative (they all have the same original data)
+        const representativeTrade = trades[0];
+
+
+
+        return {
+          ...representativeTrade,
+          id: originalId, // Use original ID
+          accountingPL: totalPL
+        };
+      });
+    } else {
+      // For accrual basis: Use trades as-is
+      tradesWithAccountingPL = tradesForStats
+        .filter(trade => trade.positionStatus !== 'Open')
+        .map(trade => ({
+          ...trade,
+          accountingPL: calculateTradePL(trade, useCashBasis)
+        }));
+    }
+
     const winningTrades = tradesWithAccountingPL.filter(t => t.accountingPL > 0);
     const winRate = tradesWithAccountingPL.length > 0 ? (winningTrades.length / tradesWithAccountingPL.length) * 100 : 0;
+
+    console.log('🔍 [Win Rate Debug] Final calculation:', {
+      totalTrades: tradesWithAccountingPL.length,
+      winningTrades: winningTrades.length,
+      winRate: winRate,
+      useCashBasis
+    });
 
     return {
       totalUnrealizedPL: unrealizedPL,
@@ -1424,9 +2261,9 @@ export const TradeJournal = React.memo(function TradeJournal({
 
 
 
-  // Memoize open trades to prevent unnecessary price fetching (use filtered trades to respond to search)
+  // Memoize open trades to prevent unnecessary price fetching (use processed trades to include local updates)
   const openTrades = React.useMemo(() => {
-    let filteredOpenTrades = trades.filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial');
+    let filteredOpenTrades = processedTrades.filter(t => t.positionStatus === 'Open' || t.positionStatus === 'Partial');
 
     // For cash basis, avoid double counting by using original trade IDs
     if (useCashBasis) {
@@ -1440,7 +2277,7 @@ export const TradeJournal = React.memo(function TradeJournal({
     }
 
     return filteredOpenTrades;
-  }, [trades, useCashBasis]);
+  }, [processedTrades, useCashBasis]);
 
   // Memoize the price fetching function to prevent re-creation
   const fetchPricesForOpenTrades = React.useCallback(async () => {
@@ -1492,6 +2329,33 @@ export const TradeJournal = React.memo(function TradeJournal({
 
   return (
     <div className="space-y-4">
+      {/* Custom CSS for sticky name column */}
+      <style jsx>{`
+        .sticky-name-header {
+          position: sticky !important;
+          left: 0 !important;
+          z-index: 30 !important;
+          background: rgb(244 244 245) !important; /* bg-default-100 */
+          min-width: 200px !important;
+          max-width: 200px !important;
+        }
+        .sticky-name-cell {
+          position: sticky !important;
+          left: 0 !important;
+          z-index: 20 !important;
+          background: white !important;
+          min-width: 200px !important;
+          max-width: 200px !important;
+        }
+        .dark .sticky-name-header {
+          background: rgb(17 24 39) !important; /* dark:bg-gray-950 */
+        }
+        .dark .sticky-name-cell {
+          background: rgb(17 24 39) !important; /* dark:bg-gray-900 */
+        }
+
+      `}</style>
+
       <div className="flex flex-col gap-4 mb-6">
         <AnimatePresence>
           {/* <div>
@@ -1513,8 +2377,8 @@ export const TradeJournal = React.memo(function TradeJournal({
               />
               <Dropdown>
                 <DropdownTrigger>
-                  <Button 
-                    variant="flat" 
+                  <Button
+                    variant="flat"
                     size="sm"
                     className="bg-default-100 dark:bg-gray-900 text-foreground dark:text-white min-w-[120px] h-9"
                     endContent={<Icon icon="lucide:chevron-down" className="text-sm dark:text-gray-400" />}
@@ -1589,7 +2453,7 @@ export const TradeJournal = React.memo(function TradeJournal({
                     className="dark:text-white dark:hover:bg-gray-800"
                     startContent={<Icon icon="lucide:check-square" className="text-sm" />}
                     onPress={() => {
-                      const allColumnKeys = allColumns.filter(col => col.key !== "actions").map(col => col.key);
+                      const allColumnKeys = allColumns.map(col => col.key);
                       setVisibleColumns(allColumnKeys);
                     }}
                   >
@@ -1600,16 +2464,16 @@ export const TradeJournal = React.memo(function TradeJournal({
                     className="dark:text-white dark:hover:bg-gray-800 border-b border-divider mb-1 pb-2"
                     startContent={<Icon icon="lucide:square" className="text-sm" />}
                     onPress={() => {
-                      // Keep essential columns visible
-                      const essentialColumns = ["tradeNo", "date", "name", "buySell", "positionStatus"];
+                      // Keep essential columns visible including actions
+                      const essentialColumns = ["tradeNo", "date", "name", "buySell", "positionStatus", "actions"];
                       setVisibleColumns(essentialColumns);
                     }}
                   >
                     Deselect All
                   </DropdownItem>
 
-                  {/* Column Selection Items */}
-                  {allColumns.filter(col => col.key !== "actions").map((column) => (
+                  {/* Column Selection Items - Include ALL columns including actions */}
+                  {allColumns.map((column) => (
                     <DropdownItem key={column.key} className="capitalize dark:text-white dark:hover:bg-gray-800">
                       {column.label}
                     </DropdownItem>
@@ -1632,17 +2496,17 @@ export const TradeJournal = React.memo(function TradeJournal({
                 <Icon icon="lucide:plus" className="text-base" />
               </Button>
             </motion.div>
-            <Tooltip content="Import trades from Excel/CSV" placement="top">
+            <MobileTooltip content="Import trades from Excel/CSV files" placement="top">
               <Button
                 isIconOnly
                 variant="light"
                 size="sm"
-                className="rounded-md p-1 hover:bg-success/10 transition"
+                className="rounded-md p-1 hover:bg-primary/10 transition"
                 onPress={onUploadOpen}
               >
-                <Icon icon="lucide:upload" className="text-base text-success" />
+                <Icon icon="lucide:upload" className="text-base text-primary" />
               </Button>
-            </Tooltip>
+            </MobileTooltip>
             <Dropdown>
               <DropdownTrigger>
                 <Button
@@ -1714,13 +2578,13 @@ export const TradeJournal = React.memo(function TradeJournal({
             />
             {/* Show info icon only on mobile for first three stats */}
             <div className="block sm:hidden">
-              <Tooltip
+              <MobileTooltip
                 placement="top"
                 className="max-w-xs text-xs p-1 bg-content1 border border-divider"
                 content={<div>{stat.tooltip}</div>}
               >
                 <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer inline-block align-middle ml-2" />
-              </Tooltip>
+              </MobileTooltip>
             </div>
           </div>
         ))}
@@ -1732,7 +2596,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             icon="lucide:indian-rupee"
             color={lazyStats.totalRealizedPL >= 0 ? "success" : "danger"}
           />
-          <Tooltip
+          <MobileTooltip
             placement="top"
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
@@ -1790,10 +2654,10 @@ export const TradeJournal = React.memo(function TradeJournal({
                               {t.name}
                             </span>
                             <div className="flex flex-col items-end ml-2">
-                              <span className={`font-mono font-medium ${
+                              <span className={`font-mono font-medium whitespace-nowrap ${
                                 t.realizedPL >= 0 ? 'text-success' : 'text-danger'
                               }`}>
-                                {formatCurrency(t.realizedPL)}
+                                ₹{formatCurrency(t.realizedPL)}
                               </span>
                               <span className={`font-mono text-xs ${
                                 t.pfImpact >= 0 ? 'text-success' : 'text-danger'
@@ -1819,7 +2683,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             })()}
           >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer inline-block align-middle ml-2" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
         <div className="flex items-center gap-2">
           <StatsCard
@@ -1828,7 +2692,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             icon="lucide:indian-rupee"
             color={lazyStats.totalUnrealizedPL >= 0 ? "success" : "danger"}
           />
-          <Tooltip
+          <MobileTooltip
             placement="top"
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
@@ -1868,8 +2732,8 @@ export const TradeJournal = React.memo(function TradeJournal({
                         <li key={`${t.name}-unrealized-${idx}`} className="flex justify-between items-center">
                           <span className="truncate max-w-[100px]" title={t.name}>{t.name}</span>
                           <div className="flex flex-col items-end ml-2">
-                            <span className={`font-mono font-medium ${t.unrealizedPL >= 0 ? 'text-success' : 'text-danger'}`}>
-                              {formatCurrency(t.unrealizedPL)}
+                            <span className={`font-mono font-medium whitespace-nowrap ${t.unrealizedPL >= 0 ? 'text-success' : 'text-danger'}`}>
+                              ₹{formatCurrency(t.unrealizedPL)}
                             </span>
                             <span className={`font-mono text-xs ${t.pfImpact >= 0 ? 'text-success' : 'text-danger'}`}>
                               ({t.pfImpact >= 0 ? '+' : ''}{t.pfImpact.toFixed(2)}%)
@@ -1886,7 +2750,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             })()}
           >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer inline-block align-middle ml-2" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
         <div className="flex items-center gap-1">
           <StatsCard
@@ -1895,7 +2759,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             icon="lucide:flame"
             color="warning"
           />
-          <Tooltip
+          <MobileTooltip
             placement="top"
             className="max-w-xs text-xs p-1 bg-content1 border border-divider"
             content={(() => {
@@ -1939,7 +2803,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             })()}
           >
             <Icon icon="lucide:info" className="text-base text-foreground-400 cursor-pointer inline-block align-middle" />
-          </Tooltip>
+          </MobileTooltip>
         </div>
       </div>
 
@@ -1947,6 +2811,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       <AnimatePresence>
         {(isRecalculating || !statsLoaded) && (
           <motion.div
+            key="loading-indicator"
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
@@ -1998,18 +2863,21 @@ export const TradeJournal = React.memo(function TradeJournal({
               )}
             </div>
           ) : (
-            <div
-              className="relative overflow-auto max-h-[70vh]
-                [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:h-1
-                [&::-webkit-scrollbar-track]:bg-transparent
-                [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full
-                [&::-webkit-scrollbar-thumb:hover]:bg-gray-400
-                dark:[&::-webkit-scrollbar-thumb]:bg-gray-600 dark:[&::-webkit-scrollbar-thumb:hover]:bg-gray-500"
-              style={{
-                scrollbarWidth: 'thin', /* Firefox - thin horizontal only */
-                scrollbarColor: 'rgb(156 163 175) transparent' /* Firefox - thumb and track colors */
-              }}
-            >
+            <>
+
+
+              <div
+                className="relative overflow-auto max-h-[70vh]
+                  [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:h-2
+                  [&::-webkit-scrollbar-track]:bg-gray-100 dark:[&::-webkit-scrollbar-track]:bg-gray-800
+                  [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full
+                  [&::-webkit-scrollbar-thumb:hover]:bg-gray-400
+                  dark:[&::-webkit-scrollbar-thumb]:bg-gray-600 dark:[&::-webkit-scrollbar-thumb:hover]:bg-gray-500"
+                style={{
+                  scrollbarWidth: 'thin', /* Firefox - thin horizontal only */
+                  scrollbarColor: 'rgb(156 163 175) transparent' /* Firefox - thumb and track colors */
+                }}
+              >
             <Table
               aria-label="Trade journal table"
             bottomContent={
@@ -2071,24 +2939,26 @@ export const TradeJournal = React.memo(function TradeJournal({
                   </div>
 
                   {/* Pagination */}
-                  <Pagination
-                    isCompact
-                    showControls
-                    showShadow={false}
-                    color="primary"
-                    size="sm"
-                    variant="light"
-                    page={page}
-                    total={pages}
-                    onChange={handlePageChange}
-                    classNames={{
-                      item: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
-                      cursor: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
-                      prev: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
-                      next: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
-                      ellipsis: "px-0.5 text-xs"
-                    }}
-                  />
+                  <div tabIndex={-1}>
+                    <Pagination
+                      isCompact
+                      showControls
+                      showShadow={false}
+                      color="primary"
+                      size="sm"
+                      variant="light"
+                      page={page}
+                      total={pages}
+                      onChange={handlePageChange}
+                      classNames={{
+                        item: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                        cursor: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                        prev: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                        next: "rounded-full w-5 h-5 text-xs flex items-center justify-center",
+                        ellipsis: "px-0.5 text-xs"
+                      }}
+                    />
+                  </div>
 
                   {/* Trade count info */}
                   <div className="text-sm text-default-500">
@@ -2100,7 +2970,7 @@ export const TradeJournal = React.memo(function TradeJournal({
               classNames={{
                 base: "min-w-full",
                 wrapper: "shadow-none p-0 rounded-none",
-                table: "table-auto",
+                table: "table-auto min-w-max",
                 thead: "[&>tr]:first:shadow-none",
                 th: "bg-default-100 dark:bg-gray-950 text-foreground-600 dark:text-white text-xs font-medium uppercase border-b border-default-200 dark:border-gray-800 sticky top-0 z-20 backdrop-blur-sm",
                 td: "py-2.5 text-sm border-b border-default-200 dark:border-gray-800 text-foreground-800 dark:text-gray-200"
@@ -2111,10 +2981,11 @@ export const TradeJournal = React.memo(function TradeJournal({
           >
             <TableHeader columns={headerColumns}>
               {(column) => (
-                <TableColumn 
-                  key={column.key} 
+                <TableColumn
+                  key={column.key}
                   align={column.key === "actions" ? "end" : "start"}
                   allowsSorting={column.sortable}
+                  className={column.key === "name" ? "sticky-name-header" : ""}
                 >
                   {column.label}
                 </TableColumn>
@@ -2128,10 +2999,13 @@ export const TradeJournal = React.memo(function TradeJournal({
               {(item, index) => (
                 <TableRow
                   key={item.id || `trade-${index}`}
-                  className="hover:bg-default-50 dark:hover:bg-gray-800 dark:bg-gray-900"
+                  className="hover:bg-default-50 dark:hover:bg-gray-800 dark:bg-gray-900 group"
                 >
                   {headerColumns.map((column) => (
-                    <TableCell key={`${item.id || `trade-${index}`}-${column.key}`}>
+                    <TableCell
+                      key={`${item.id || `trade-${index}`}-${column.key}`}
+                      className={column.key === "name" ? "sticky-name-cell" : ""}
+                    >
                       {renderCell(item, column.key)}
                     </TableCell>
                   ))}
@@ -2142,7 +3016,7 @@ export const TradeJournal = React.memo(function TradeJournal({
             {/* Sleek, small add inline trade icon below the table - only show when there are trades */}
             {items.length > 0 && (
               <div className="p-2 border-t border-divider bg-white dark:bg-gray-900">
-                <Tooltip content="Add new trade (inline)" placement="top">
+                <MobileTooltip content="Add new trade (inline)" placement="top">
                   <Button
                     isIconOnly
                     color="primary"
@@ -2153,10 +3027,11 @@ export const TradeJournal = React.memo(function TradeJournal({
                   >
                     <Icon icon="lucide:list-plus" className="text-lg" />
                   </Button>
-                </Tooltip>
+                </MobileTooltip>
               </div>
             )}
             </div>
+            </>
           )}
         </CardBody>
       </Card>
@@ -2164,6 +3039,7 @@ export const TradeJournal = React.memo(function TradeJournal({
       <AnimatePresence>
         {isAddOpen && (
           <TradeModal
+            key="add-trade-modal"
             isOpen={isAddOpen}
             onOpenChange={onAddOpenChange}
             onSave={handleAddTrade}
@@ -2173,8 +3049,9 @@ export const TradeJournal = React.memo(function TradeJournal({
         )}
 
         {selectedTrade && (
-          <>
+          <React.Fragment key={`trade-modals-${selectedTrade.id}`}>
             <TradeModal
+              key="edit-trade-modal"
               isOpen={isEditOpen}
               onOpenChange={onEditOpenChange}
               trade={selectedTrade}
@@ -2184,15 +3061,17 @@ export const TradeJournal = React.memo(function TradeJournal({
             />
 
             <DeleteConfirmModal
+              key="delete-confirm-modal"
               isOpen={isDeleteOpen}
               onOpenChange={onDeleteOpenChange}
               onDelete={handleDeleteConfirm}
               tradeName={selectedTrade.name}
             />
-          </>
+          </React.Fragment>
         )}
 
         <TradeUploadModal
+          key="upload-trade-modal"
           isOpen={isUploadOpen}
           onOpenChange={onUploadOpenChange}
           onImport={handleImportTrades}
@@ -2200,6 +3079,8 @@ export const TradeJournal = React.memo(function TradeJournal({
           getPortfolioSize={getPortfolioSize}
         />
       </AnimatePresence>
+
+
     </div>
   );
 });
@@ -2425,6 +3306,8 @@ interface EditableCellProps {
   min?: number;
   max?: number;
   options?: string[];
+  tradeId?: string;
+  field?: string;
 }
 
 const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCell({
@@ -2434,10 +3317,12 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
   colorValue = false,
   min,
   max,
-  options
+  options,
+  tradeId,
+  field
 }) {
   const [isEditing, setIsEditing] = React.useState(false);
-  
+
   // Format date as dd-mm-yyyy for display and editing
   const formatDateForDisplay = (dateStr: string) => {
     try {
@@ -2497,12 +3382,30 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
     }
   }, [isEditing]);
 
+  // Track editing state with ref to prevent unwanted updates during editing
+  const isEditingRef = React.useRef(false);
+
+  // Update the ref when editing state changes
   React.useEffect(() => {
-    setEditValue(getInitialEditValue());
-  }, [getInitialEditValue]);
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  // Update editValue when value prop changes, but only when not editing
+  React.useEffect(() => {
+    // Only update if not currently editing and the value has actually changed
+    if (!isEditing && !isEditingRef.current) {
+      const newEditValue = getInitialEditValue();
+      if (newEditValue !== editValue) {
+        setEditValue(newEditValue);
+      }
+    }
+  }, [value, type, isEditing, getInitialEditValue, editValue]);
 
   const handleSave = () => {
+    // Update refs and state to exit editing mode
+    isEditingRef.current = false;
     setIsEditing(false);
+
     if (type === "number" || type === "price") {
       onSave(Number(editValue));
     } else if (type === "date") {
@@ -2519,11 +3422,16 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
   };
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Date selection completes editing
+    isEditingRef.current = false;
     const isoDate = e.target.value; // yyyy-mm-dd
     if (isoDate) {
       const displayDate = formatDateForDisplay(isoDate);
       setEditValue(displayDate);
       onSave(convertToFullISO(isoDate));
+    } else {
+      setEditValue('');
+      onSave('');
     }
   };
 
@@ -2543,8 +3451,10 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
   };
 
   const handleFocus = () => {
-    // Don't allow editing if CMP was auto-fetched
-    if (!isEditing && !isAutoFetched) {
+    if (!isEditing) {
+      // Update ref immediately to prevent race conditions
+      isEditingRef.current = true;
+      setEditValue(getInitialEditValue());
       setIsEditing(true);
     }
   };
@@ -2561,6 +3471,10 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
       initial={false}
       animate={{ height: "auto" }}
       transition={{ duration: 0.2 }}
+      data-editable-cell={tradeId && field ? "true" : undefined}
+      data-trade-id={tradeId}
+      data-field={field}
+      tabIndex={tradeId && field ? 0 : undefined}
     >
       <AnimatePresence mode="wait">
         {type === "date" ? (
@@ -2581,7 +3495,11 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
                 ref={inputRef}
                 type={inputTypeForHero()}
                 value={editValue}
-                onValueChange={setEditValue}
+                onValueChange={(value) => {
+                  // Ensure ref is set during typing to prevent unwanted updates
+                  isEditingRef.current = true;
+                  setEditValue(value);
+                }}
                 onBlur={handleSave}
                 onKeyDown={handleKeyDown}
                 size="sm"
@@ -2591,7 +3509,7 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
                   input: "text-right font-medium text-small py-0 dark:text-white",
                   inputWrapper: "h-7 min-h-unit-7 bg-content1 dark:bg-gray-900 shadow-sm"
                 }}
-                startContent={type === "price" && <span className="text-default-400 dark:text-gray-400 text-small">₹</span>}
+
                 step={type === "price" ? "0.05" : undefined}
                 min={min !== undefined ? min : (type === "price" ? 0 : undefined)}
                 max={max !== undefined ? max : undefined}
@@ -2603,16 +3521,30 @@ const EditableCell: React.FC<EditableCellProps> = React.memo(function EditableCe
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => {
-                  setEditValue(String(value));
+                  // Update ref immediately to prevent race conditions
+                  isEditingRef.current = true;
+                  setEditValue(getInitialEditValue());
                   setIsEditing(true);
                 }}
                 tabIndex={0}
+                data-trade-id={tradeId}
+                data-field={field}
                 onFocus={handleFocus}
+                onKeyDown={(e) => {
+                  // Prevent default tab behavior since we handle it globally
+                  if (e.key === 'Tab') {
+                    e.preventDefault();
+                  }
+                  // Allow Enter to start editing
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleFocus();
+                  }
+                }}
               >
                 <div className="flex items-center gap-1">
-                  {type === "price" && <span className="text-default-400 dark:text-gray-400 text-small">₹</span>}
-                  <span className={`font-medium text-small ${getValueColor()}`}>
-                    {type === "price" ? formatCurrency(value as number) : String(value)}
+                  <span className={`font-medium text-small whitespace-nowrap ${getValueColor()}`}>
+                    {type === "price" ? `₹${formatCurrency(value as number)}` : String(value)}
                   </span>
                 </div>
               </motion.div>
@@ -2649,8 +3581,10 @@ interface BuySellCellProps {
 }
 
 const BuySellCell: React.FC<BuySellCellProps> = React.memo(function BuySellCell({ value, onSave }) {
+  const [isOpen, setIsOpen] = React.useState(false);
+
   return (
-    <Dropdown>
+    <Dropdown isOpen={isOpen} onOpenChange={setIsOpen}>
       <DropdownTrigger>
         <Button
           size="sm"
@@ -2658,6 +3592,18 @@ const BuySellCell: React.FC<BuySellCellProps> = React.memo(function BuySellCell(
           color={value === "Buy" ? "success" : "danger"}
           className="min-w-[80px] h-7"
           endContent={<Icon icon="lucide:chevron-down" className="w-3.5 h-3.5" />}
+          onKeyDown={(e) => {
+            if (e.key === 'Tab') {
+              e.preventDefault(); // Let global handler manage tab navigation
+            } else if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              setIsOpen(true);
+            }
+          }}
+          onFocus={() => {
+            // Auto-open dropdown when focused via tab navigation
+            setTimeout(() => setIsOpen(true), 100);
+          }}
         >
           {value}
         </Button>
@@ -2669,7 +3615,14 @@ const BuySellCell: React.FC<BuySellCellProps> = React.memo(function BuySellCell(
         onSelectionChange={(keys) => {
           const selected = Array.from(keys)[0] as "Buy" | "Sell";
           onSave(selected);
+          setIsOpen(false);
         }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setIsOpen(false);
+          }
+        }}
+        autoFocus
       >
         <DropdownItem key="Buy">Buy</DropdownItem>
         <DropdownItem key="Sell">Sell</DropdownItem>
@@ -2684,8 +3637,10 @@ interface PositionStatusCellProps {
 }
 
 const PositionStatusCell: React.FC<PositionStatusCellProps> = React.memo(function PositionStatusCell({ value, onSave }) {
+  const [isOpen, setIsOpen] = React.useState(false);
+
   return (
-    <Dropdown>
+    <Dropdown isOpen={isOpen} onOpenChange={setIsOpen}>
       <DropdownTrigger>
         <Button
           size="sm"
@@ -2696,6 +3651,17 @@ const PositionStatusCell: React.FC<PositionStatusCellProps> = React.memo(functio
           }
           className="min-w-[90px] h-7 capitalize"
           endContent={<Icon icon="lucide:chevron-down" className="w-3.5 h-3.5" />}
+          onKeyDown={(e) => {
+            if (e.key === 'Tab') {
+              e.preventDefault();
+            } else if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              setIsOpen(true);
+            }
+          }}
+          onFocus={() => {
+            setTimeout(() => setIsOpen(true), 100);
+          }}
         >
           {value}
         </Button>
@@ -2707,7 +3673,14 @@ const PositionStatusCell: React.FC<PositionStatusCellProps> = React.memo(functio
         onSelectionChange={(keys) => {
           const selected = Array.from(keys)[0] as "Open" | "Closed" | "Partial";
           onSave(selected);
+          setIsOpen(false);
         }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            setIsOpen(false);
+          }
+        }}
+        autoFocus
       >
         <DropdownItem key="Open">Open</DropdownItem>
         <DropdownItem key="Closed">Closed</DropdownItem>
@@ -2856,6 +3829,13 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
   const inputRef = React.useRef<HTMLInputElement>(null);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
+  // Update editValue when value prop changes, but only when not editing
+  React.useEffect(() => {
+    if (!isEditing) {
+      setEditValue(value);
+    }
+  }, [value, isEditing]);
+
   // Move stockNames state and effect here
   const [stockNames, setStockNames] = React.useState<string[]>([]);
   React.useEffect(() => {
@@ -2877,19 +3857,19 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
   // Function to find closest matching stock name
   const findClosestMatch = (input: string): string | null => {
     if (!input || !stockNames.length) return null;
-    
+
     const inputLower = input.toLowerCase();
     let bestMatch = null;
     let bestScore = 0;
 
     // First try exact prefix match
-    const exactPrefixMatch = stockNames.find(name => 
+    const exactPrefixMatch = stockNames.find(name =>
       name.toLowerCase().startsWith(inputLower)
     );
     if (exactPrefixMatch) return exactPrefixMatch;
 
     // Then try contains match
-    const containsMatch = stockNames.find(name => 
+    const containsMatch = stockNames.find(name =>
       name.toLowerCase().includes(inputLower)
     );
     if (containsMatch) return containsMatch;
@@ -2920,7 +3900,7 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
 
   React.useEffect(() => {
     if (isEditing && editValue) {
-      const matches = stockNames.filter(n => 
+      const matches = stockNames.filter(n =>
         n.toLowerCase().includes(editValue.toLowerCase())
       );
       setFiltered(matches.slice(0, 10));
@@ -2930,6 +3910,27 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
       setShowDropdown(false);
     }
   }, [editValue, isEditing, stockNames]);
+
+  // Ensure input stays focused when dropdown is shown
+  React.useEffect(() => {
+    if (isEditing && inputRef.current && showDropdown) {
+      inputRef.current.focus();
+    }
+  }, [isEditing, showDropdown]);
+
+  // Auto-start editing when focused via tab navigation
+  const handleAutoEdit = React.useCallback(() => {
+    if (!isEditing) {
+      setIsEditing(true);
+      setEditValue(value);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select(); // Select all text for easy replacement
+        }
+      }, 50);
+    }
+  }, [isEditing, value]);
 
   const handleSave = (val?: string) => {
     const finalValue = val ?? editValue;
@@ -2982,7 +3983,7 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
     if (selectedIndex >= 0 && dropdownRef.current) {
       const selectedElement = document.getElementById(`stock-suggestion-${selectedIndex}`);
       if (selectedElement) {
-        selectedElement.scrollIntoView({ 
+        selectedElement.scrollIntoView({
           block: 'nearest',
           behavior: 'smooth'
         });
@@ -2991,26 +3992,52 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
   }, [selectedIndex]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!showDropdown) return;
+    if (!showDropdown || filtered.length === 0) {
+      // Allow normal typing when dropdown is not shown
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSave();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setIsEditing(false);
+        setShowDropdown(false);
+      }
+      return;
+    }
 
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex(prev => {
           const next = prev + 1;
-          return next >= filtered.length ? 0 : next;
+          const newIndex = next >= filtered.length ? 0 : next;
+          // Scroll to selected item
+          setTimeout(() => {
+            const selectedElement = dropdownRef.current?.querySelector(`[data-index="${newIndex}"]`);
+            selectedElement?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }, 0);
+          return newIndex;
         });
         break;
       case 'ArrowUp':
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex(prev => {
           const next = prev - 1;
-          return next < 0 ? filtered.length - 1 : next;
+          const newIndex = next < 0 ? filtered.length - 1 : next;
+          // Scroll to selected item
+          setTimeout(() => {
+            const selectedElement = dropdownRef.current?.querySelector(`[data-index="${newIndex}"]`);
+            selectedElement?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }, 0);
+          return newIndex;
         });
         break;
       case 'Enter':
         e.preventDefault();
-        if (selectedIndex >= 0) {
+        e.stopPropagation();
+        if (selectedIndex >= 0 && filtered[selectedIndex]) {
           handleSave(filtered[selectedIndex]);
         } else if (filtered.length === 1) {
           handleSave(filtered[0]);
@@ -3020,14 +4047,33 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
         break;
       case 'Escape':
         e.preventDefault();
+        e.stopPropagation();
         setShowDropdown(false);
         setSelectedIndex(-1);
+        setIsEditing(false);
         break;
       case 'Tab':
-        if (selectedIndex >= 0) {
+        if (selectedIndex >= 0 && filtered[selectedIndex]) {
           e.preventDefault();
+          e.stopPropagation();
           handleSave(filtered[selectedIndex]);
         }
+        break;
+      case 'Home':
+        e.preventDefault();
+        setSelectedIndex(0);
+        break;
+      case 'End':
+        e.preventDefault();
+        setSelectedIndex(filtered.length - 1);
+        break;
+      case 'PageDown':
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 5, filtered.length - 1));
+        break;
+      case 'PageUp':
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 5, 0));
         break;
     }
   };
@@ -3041,20 +4087,30 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
           className="w-full min-w-[220px] px-3 py-2 text-sm bg-gray-100 dark:bg-gray-700 rounded focus:outline-none focus:ring-2 focus:ring-primary"
           value={editValue}
           onChange={e => setEditValue(e.target.value)}
-          onBlur={() => setTimeout(() => handleSave(), 100)}
+          onBlur={(e) => {
+            // Don't close if focus is moving to the dropdown
+            if (!dropdownRef.current?.contains(e.relatedTarget as Node)) {
+              setTimeout(() => handleSave(), 150);
+            }
+          }}
           onKeyDown={handleKeyDown}
           autoFocus
         />
         {showDropdown && (
           <div
             ref={dropdownRef}
-            className="absolute z-10 left-0 right-0 min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow max-h-48 overflow-y-auto overflow-x-auto mt-1"
+            className="absolute z-50 left-0 right-0 min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow max-h-48 overflow-y-auto overflow-x-auto mt-1"
             role="listbox"
             tabIndex={-1}
+            onMouseDown={(e) => {
+              // Prevent input from losing focus when clicking dropdown
+              e.preventDefault();
+            }}
           >
             {filtered.map((name, i) => (
               <div
                 key={name}
+                data-index={i}
                 id={`stock-suggestion-${i}`}
                 role="option"
                 aria-selected={i === selectedIndex}
@@ -3063,8 +4119,15 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
                     ? 'bg-blue-100 dark:bg-blue-900'
                     : 'hover:bg-blue-50 dark:hover:bg-blue-800'
                 }`}
-                onMouseDown={() => handleSave(name)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  handleSave(name);
+                }}
                 onMouseEnter={() => setSelectedIndex(i)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleSave(name);
+                }}
               >
                 {name}
               </div>
@@ -3076,9 +4139,11 @@ const NameCell: React.FC<NameCellProps> = React.memo(function NameCell({ value, 
   }
 
   return (
-    <div 
+    <div
       className="px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors cursor-text"
       onClick={() => setIsEditing(true)}
+      onFocus={handleAutoEdit}
+      tabIndex={0}
     >
       {value || <span className="text-gray-400">Stock name</span>}
     </div>
@@ -3114,6 +4179,7 @@ const SETUP_LOCAL_KEY = 'custom_setup_options';
 
 const SetupCell: React.FC<SetupCellProps> = React.memo(function SetupCell({ value, onSave }) {
   const [customOptions, setCustomOptions] = React.useState<string[]>([]);
+  const [isOpen, setIsOpen] = React.useState(false);
   const allOptions = React.useMemo(() => [...SETUP_OPTIONS, ...customOptions], [customOptions]);
 
   React.useEffect(() => {
@@ -3157,10 +4223,23 @@ const SetupCell: React.FC<SetupCellProps> = React.memo(function SetupCell({ valu
   };
 
   return (
-    <Dropdown>
+    <Dropdown isOpen={isOpen} onOpenChange={setIsOpen}>
       <DropdownTrigger>
-        <Button size="sm" variant="flat" color="primary" className="min-w-[120px] h-7 justify-between"
+        <Button
+          size="sm"
+          variant="flat"
+          color="primary"
+          className="min-w-[120px] h-7 justify-between"
           endContent={<Icon icon="lucide:chevron-down" className="w-3.5 h-3.5" />}
+          onFocus={() => setTimeout(() => setIsOpen(true), 100)}
+          onKeyDown={(e) => {
+            if (e.key === 'Tab') {
+              e.preventDefault();
+            } else if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              setIsOpen(true);
+            }
+          }}
         >
           {value || <span className="text-default-400">Setup</span>}
         </Button>
@@ -3384,7 +4463,7 @@ const NotesCell: React.FC<NotesCellProps> = React.memo(function NotesCell({ valu
     onSave(editValue);
     onClose();
   };
-  
+
   const handleCancel = () => {
     setEditValue(value); // Reset any changes
     onClose();
@@ -3451,8 +4530,10 @@ const CMPCell: React.FC<CMPCellProps> = React.memo(function CMPCell({ value, isA
   }, [isEditing]);
 
   React.useEffect(() => {
-    setEditValue(String(value || ''));
-  }, [value]);
+    if (!isEditing) {
+      setEditValue(String(value || ''));
+    }
+  }, [value, isEditing]);
 
   const handleSave = () => {
     setIsEditing(false);
@@ -3479,11 +4560,9 @@ const CMPCell: React.FC<CMPCellProps> = React.memo(function CMPCell({ value, isA
   const formatCurrency = (val: number) => {
     if (val === 0) return '0';
     return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
-    }).format(val).replace('₹', '').trim();
+    }).format(val);
   };
 
   return (
@@ -3526,7 +4605,7 @@ const CMPCell: React.FC<CMPCellProps> = React.memo(function CMPCell({ value, isA
             onClick={handleFocus}
             className={`
               py-1 px-2 text-right rounded-md transition-colors
-              flex items-center justify-end gap-1
+              flex items-center justify-end gap-1 whitespace-nowrap
               ${isAutoFetched === false
                 ? 'border-l-2 border-warning cursor-pointer hover:bg-default-100 dark:hover:bg-default-800'
                 : isAutoFetched === true
@@ -3536,7 +4615,7 @@ const CMPCell: React.FC<CMPCellProps> = React.memo(function CMPCell({ value, isA
             `}
           >
             <span className="font-medium">
-              {value > 0 ? formatCurrency(value) : '-'}
+              {value > 0 ? `₹${formatCurrency(value)}` : '-'}
             </span>
             {isAutoFetched === false && (
               <Icon

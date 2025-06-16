@@ -1,4 +1,6 @@
 import { GlobalFilter } from "../context/GlobalFilterContext";
+import { Trade } from "../types/trade";
+import { getTradeDateForAccounting } from "./accountingUtils";
 
 export function isInGlobalFilter(dateStr: string, filter: GlobalFilter): boolean {
   const d = new Date(dateStr);
@@ -39,4 +41,13 @@ export function isInGlobalFilter(dateStr: string, filter: GlobalFilter): boolean
     default:
       return true;
   }
-} 
+}
+
+/**
+ * Accounting-aware trade filtering function
+ * Uses the appropriate date based on accounting method
+ */
+export function isTradeInGlobalFilter(trade: Trade, filter: GlobalFilter, useCashBasis: boolean = false): boolean {
+  const relevantDate = getTradeDateForAccounting(trade, useCashBasis);
+  return isInGlobalFilter(relevantDate, filter);
+}

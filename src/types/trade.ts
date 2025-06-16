@@ -69,6 +69,12 @@ export interface Trade {
 
   // Bulk import optimization flag
   _needsRecalculation?: boolean; // True if trade was imported with skipped calculations
+
+  // User edit tracking - fields that have been manually edited by user
+  _userEditedFields?: string[]; // Array of field names that user has manually edited
+
+  // Cash basis display grouping - stores expanded trades for backend calculations
+  _expandedTrades?: Trade[]; // Array of expanded trades for cash basis calculations
 }
 
 export interface CapitalChange {

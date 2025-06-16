@@ -243,7 +243,8 @@ import * as Papa from "papaparse"; // Centralized import
     const { portfolioSize, getPortfolioSize } = useTruePortfolioWithTrades(trades);
     // Reset form when symbol changes - moved after handleChange is defined
 
-  // Unique key for sessionStorage
+  // Unique key for sessionStorage (intentionally using sessionStorage for temporary form data)
+  // This is separate from the main IndexedDB migration as it's for temporary auto-save functionality
   const sessionKey = React.useMemo(() => {
     if (mode === 'edit' && trade?.id) return `tradeModal_edit_${trade.id}`;
     if (mode === 'add') return 'tradeModal_add';
@@ -821,7 +822,7 @@ import * as Papa from "papaparse"; // Centralized import
               formData._cmpAutoFetched === false
                 ? "Manually entered price"
                 : formData._cmpAutoFetched === true
-                  ? "Auto-fetched from market data - not editable"
+                  ? ""
                   : latestPrice?.close
                     ? "Price available - will auto-update"
                     : ""

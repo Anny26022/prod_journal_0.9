@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noCheck && vite build",
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
@@ -23,6 +23,7 @@
     "@vercel/analytics": "^1.5.0",
     "chartjs-adapter-date-fns": "^3.0.0",
     "date-fns": "^4.1.0",
+    "dexie": "^4.0.11",
     "framer-motion": "^11.18.2",
     "papaparse": "^5.5.3",
     "react": "^18.3.1",

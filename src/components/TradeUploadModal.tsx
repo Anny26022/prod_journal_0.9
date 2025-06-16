@@ -124,6 +124,75 @@ const AUTO_POPULATED_FIELDS = [
 // Our trade fields that can be mapped (only user input fields)
 const MAPPABLE_FIELDS = USER_INPUT_FIELDS;
 
+// Optimized parsing functions for performance
+const parseFlexibleNumber = (value: any): number => {
+  if (value === null || value === undefined || value === '') return 0;
+
+  // Fast path for numbers
+  if (typeof value === 'number') return value;
+
+  let stringValue = String(value).trim();
+
+  // Quick check for simple numbers
+  if (/^\d+\.?\d*$/.test(stringValue)) {
+    return parseFloat(stringValue);
+  }
+
+  // Only do complex cleaning if needed
+  stringValue = stringValue
+    .replace(/[₹$€£¥,\s]/g, '') // Remove currency symbols, commas, spaces
+    .replace(/[^\d.-]/g, ''); // Keep only digits, dots, and minus signs
+
+  // Handle decimal comma (European format)
+  if (/\d+,\d{1,2}$/.test(stringValue)) {
+    stringValue = stringValue.replace(',', '.');
+  }
+
+  const parsed = parseFloat(stringValue);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
+const parseFlexibleDate = (value: any): string | null => {
+  if (!value) return null;
+
+  const stringValue = String(value).trim();
+  if (!stringValue) return null;
+
+  try {
+    // Fast path: try direct Date parsing first
+    let date = new Date(stringValue);
+
+    // If direct parsing worked, validate and return
+    if (!isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
+      return date.toISOString();
+    }
+
+    // Handle common CSV date formats only if direct parsing failed
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(stringValue)) {
+      const [first, second, year] = stringValue.split('/').map(Number);
+      // Assume DD/MM/YYYY if first > 12, otherwise MM/DD/YYYY
+      if (first > 12) {
+        date = new Date(year, second - 1, first);
+      } else {
+        date = new Date(year, first - 1, second);
+      }
+    } else if (/^\d{5}$/.test(stringValue)) {
+      // Excel serial date
+      const serialDate = parseInt(stringValue);
+      date = new Date(1900, 0, serialDate - 1);
+    }
+
+    // Final validation
+    if (!isNaN(date.getTime()) && date.getFullYear() > 1900 && date.getFullYear() < 2100) {
+      return date.toISOString();
+    }
+  } catch (error) {
+    // Silently fail for performance
+  }
+
+  return null;
+};
+
 export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
   isOpen,
   onOpenChange,
@@ -131,6 +200,8 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
   portfolioSize = 100000,
   getPortfolioSize
 }) => {
+  // Upload functionality is now enabled
+  const isUploadDisabled = false;
   const [step, setStep] = useState<'upload' | 'mapping' | 'preview' | 'importing'>('upload');
   const [parsedData, setParsedData] = useState<ParsedData | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
@@ -138,6 +209,7 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
   const [previewTrades, setPreviewTrades] = useState<Trade[]>([]);
   const [importProgress, setImportProgress] = useState(0);
   const [dragActive, setDragActive] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Function to recalculate all auto-populated fields for a trade
   // NOTE: CMP will be auto-fetched from API when trade name is set, not imported from CSV
@@ -419,51 +491,77 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
   }, []);
 
   const handleFileUpload = useCallback((file: File) => {
+    setError(null); // Clear any previous errors
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
-    
+
     if (fileExtension === 'csv') {
       Papa.parse(file, {
         complete: (results) => {
-          if (results.data && results.data.length > 0) {
-            const headers = results.data[0] as string[];
-            const rows = results.data.slice(1) as any[][];
+          try {
+            if (results.errors && results.errors.length > 0) {
+              console.warn('CSV parsing warnings:', results.errors);
+            }
 
-            // Filter out completely empty rows and clean headers
-            const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
-            const cleanRows = rows.filter(row => {
-              // Keep row if it has at least one non-empty, non-whitespace cell
-              return row.some(cell =>
-                cell !== null &&
-                cell !== undefined &&
-                String(cell).trim() !== '' &&
-                String(cell).toLowerCase() !== 'stock name'
-              );
-            });
+            if (results.data && results.data.length > 0) {
+              const headers = results.data[0] as string[];
+              const rows = results.data.slice(1) as any[][];
 
-            console.log(`📄 CSV parsed: ${cleanHeaders.length} columns, ${cleanRows.length} data rows (${rows.length - cleanRows.length} empty rows filtered)`);
+              // Filter out completely empty rows and clean headers
+              const cleanHeaders = headers.filter(h => h && String(h).trim() !== '');
+              const cleanRows = rows.filter(row => {
+                // Keep row if it has at least one non-empty, non-whitespace cell
+                return row.some(cell =>
+                  cell !== null &&
+                  cell !== undefined &&
+                  String(cell).trim() !== '' &&
+                  String(cell).toLowerCase() !== 'stock name'
+                );
+              });
 
-            setParsedData({
-              headers: cleanHeaders,
-              rows: cleanRows,
-              fileName: file.name
-            });
+              if (cleanHeaders.length === 0) {
+                setError('No valid columns found in the CSV file. Please check your file format.');
+                return;
+              }
 
-            const smartMapping = generateSmartMapping(cleanHeaders);
-            setColumnMapping(smartMapping.mapping);
-            setMappingConfidence(smartMapping.confidence);
-            setStep('mapping');
+              if (cleanRows.length === 0) {
+                setError('No valid data rows found in the CSV file. Please check your file content.');
+                return;
+              }
+
+              console.log(`📄 CSV parsed: ${cleanHeaders.length} columns, ${cleanRows.length} data rows`);
+
+              setParsedData({
+                headers: cleanHeaders,
+                rows: cleanRows,
+                fileName: file.name
+              });
+
+              const smartMapping = generateSmartMapping(cleanHeaders);
+              setColumnMapping(smartMapping.mapping);
+              setMappingConfidence(smartMapping.confidence);
+              setStep('mapping');
+            } else {
+              setError('The CSV file appears to be empty or invalid. Please check your file.');
+            }
+          } catch (error) {
+            console.error('Error processing CSV file:', error);
+            setError('Failed to process the CSV file. Please check the file format and try again.');
           }
         },
         header: false,
         skipEmptyLines: true,
         transform: (value) => {
-          // Clean up cell values and handle multi-line headers
+          // Minimal cleaning for performance
           if (typeof value === 'string') {
-            return value.trim()
-              .replace(/\r\n/g, '\n')  // Normalize line endings
-              .replace(/\r/g, '\n');   // Handle old Mac line endings
+            return value.trim().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
           }
           return value;
+        },
+        dynamicTyping: false, // Disable automatic type conversion for better control
+        fastMode: true, // Enable fast mode for better performance
+        error: (error) => {
+          console.error('CSV parsing error:', error);
+          setError(`CSV parsing failed: ${error.message}`);
         }
       });
     } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
@@ -492,7 +590,7 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
               );
             });
 
-            console.log(`📊 Excel parsed: ${cleanHeaders.length} columns, ${cleanRows.length} data rows (${rows.length - cleanRows.length} empty rows filtered)`);
+            console.log(`📊 Excel parsed: ${cleanHeaders.length} columns, ${cleanRows.length} data rows`);
 
             setParsedData({
               headers: cleanHeaders,
@@ -552,19 +650,18 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     });
   }, []);
 
-  // Generate preview trades based on mapping
+  // Generate preview trades based on mapping - optimized for speed
   const generatePreview = useCallback(() => {
     if (!parsedData) return;
 
     const trades: Trade[] = [];
     let validTradeCount = 0;
-    let processedRows = 0;
 
-    // Process rows until we have 5 valid trades for preview or run out of rows
-    for (const row of parsedData.rows) {
+    // Only process first 10 rows for preview to keep it fast
+    const previewRows = parsedData.rows.slice(0, 10);
+
+    for (const row of previewRows) {
       if (trades.length >= 5) break;
-
-      processedRows++;
       const trade: Partial<Trade> = {
         id: generateId(),
         tradeNo: '',
@@ -624,11 +721,13 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
           // Type conversion based on field - ONLY for user input fields
           if (['entry', 'sl', 'tsl', 'pyramid1Price', 'pyramid2Price',
                'exit1Price', 'exit2Price', 'exit3Price'].includes(field)) {
-            // Handle currency symbols for price fields
-            let cleanValue = String(value || '').replace(/[₹,]/g, '').trim();
-            trade[field as keyof Trade] = Number(cleanValue) || 0;
+            // Enhanced number parsing for cross-platform compatibility
+            const parsedNumber = parseFlexibleNumber(value);
+            trade[field as keyof Trade] = parsedNumber;
           } else if (['initialQty', 'pyramid1Qty', 'pyramid2Qty', 'exit1Qty', 'exit2Qty', 'exit3Qty'].includes(field)) {
-            trade[field as keyof Trade] = Number(value) || 0;
+            // Enhanced quantity parsing for cross-platform compatibility
+            const parsedQuantity = parseFlexibleNumber(value);
+            trade[field as keyof Trade] = Math.round(parsedQuantity); // Quantities should be whole numbers
           } else if (field === 'buySell') {
             // Handle Buy/Sell field - normalize common variations
             const buySellValue = String(value || '').toLowerCase().trim();
@@ -644,11 +743,9 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             const boolValue = String(value || '').toLowerCase();
             trade[field as keyof Trade] = boolValue === 'true' || boolValue === 'yes' || boolValue === '1';
           } else if (field.includes('Date') && value) {
-            try {
-              trade[field as keyof Trade] = new Date(value).toISOString();
-            } catch {
-              trade[field as keyof Trade] = value;
-            }
+            // Enhanced date parsing with multiple format support
+            const parsedDate = parseFlexibleDate(value);
+            trade[field as keyof Trade] = parsedDate || value;
           } else {
             trade[field as keyof Trade] = String(value || '');
           }
@@ -663,7 +760,7 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
       }
     }
 
-    console.log(`📋 Preview generated: ${trades.length} valid trades from first ${processedRows} rows`);
+    console.log(`📋 Preview generated: ${trades.length} valid trades from first ${previewRows.length} rows`);
     setPreviewTrades(trades);
     setStep('preview');
   }, [parsedData, columnMapping, recalculateTradeFields, isTradeCompletelyBlank]);
@@ -679,13 +776,23 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     let validTradeCount = 0;
     let skippedBlankTrades = 0;
 
-    // Batch size for progress updates - larger batches for better performance
-    const batchSize = Math.max(1, Math.floor(totalRows / 20)); // Update progress 20 times max
+    // Process in larger chunks for better performance
+    const CHUNK_SIZE = 50; // Process 50 trades at a time
+    const chunks = [];
 
-    console.log(`🔍 Processing ${totalRows} rows from import file...`);
+    // Split rows into chunks
+    for (let i = 0; i < totalRows; i += CHUNK_SIZE) {
+      chunks.push(parsedData.rows.slice(i, i + CHUNK_SIZE));
+    }
 
-    for (let i = 0; i < totalRows; i++) {
-      const row = parsedData.rows[i];
+    console.log(`🔍 Processing ${totalRows} rows in ${chunks.length} chunks...`);
+
+    // Process chunks with yielding to prevent UI freezing
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+      const chunk = chunks[chunkIndex];
+
+      // Process each row in the chunk
+      for (const row of chunk) {
 
       // Create base trade object
       const trade: Partial<Trade> = {
@@ -747,11 +854,13 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
           // Type conversion based on field - ONLY for user input fields
           if (['entry', 'sl', 'tsl', 'pyramid1Price', 'pyramid2Price',
                'exit1Price', 'exit2Price', 'exit3Price'].includes(field)) {
-            // Handle currency symbols for price fields
-            let cleanValue = String(value || '').replace(/[₹,]/g, '').trim();
-            trade[field as keyof Trade] = Number(cleanValue) || 0;
+            // Enhanced number parsing for cross-platform compatibility
+            const parsedNumber = parseFlexibleNumber(value);
+            trade[field as keyof Trade] = parsedNumber;
           } else if (['initialQty', 'pyramid1Qty', 'pyramid2Qty', 'exit1Qty', 'exit2Qty', 'exit3Qty'].includes(field)) {
-            trade[field as keyof Trade] = Number(value) || 0;
+            // Enhanced quantity parsing for cross-platform compatibility
+            const parsedQuantity = parseFlexibleNumber(value);
+            trade[field as keyof Trade] = Math.round(parsedQuantity); // Quantities should be whole numbers
           } else if (field === 'buySell') {
             // Handle Buy/Sell field - normalize common variations
             const buySellValue = String(value || '').toLowerCase().trim();
@@ -767,36 +876,43 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
             const boolValue = String(value || '').toLowerCase();
             trade[field as keyof Trade] = boolValue === 'true' || boolValue === 'yes' || boolValue === '1';
           } else if (field.includes('Date') && value) {
-            try {
-              trade[field as keyof Trade] = new Date(value).toISOString();
-            } catch {
-              trade[field as keyof Trade] = value;
-            }
+            // Enhanced date parsing with multiple format support
+            const parsedDate = parseFlexibleDate(value);
+            trade[field as keyof Trade] = parsedDate || value;
           } else {
             trade[field as keyof Trade] = String(value || '');
           }
         }
       });
 
-      // Check if trade is completely blank and skip if so
-      if (isTradeCompletelyBlank(trade)) {
-        skippedBlankTrades++;
-        console.log(`⏭️ Skipping blank trade at row ${i + 1}`);
-      } else {
-        // Assign sequential trade number only for valid trades
-        validTradeCount++;
-        trade.tradeNo = String(validTradeCount);
+        // Check if trade is completely blank and skip if so
+        if (isTradeCompletelyBlank(trade)) {
+          skippedBlankTrades++;
+        } else {
+          // Assign sequential trade number only for valid trades
+          validTradeCount++;
+          trade.tradeNo = String(validTradeCount);
 
-        // Recalculate all auto-populated fields
-        const recalculatedTrade = recalculateTradeFields(trade as Trade);
-        trades.push(recalculatedTrade);
+          // Recalculate all auto-populated fields
+          const recalculatedTrade = recalculateTradeFields(trade as Trade);
+          trades.push(recalculatedTrade);
+        }
       }
 
-      // Update progress in batches for better performance
-      if (i % batchSize === 0 || i === totalRows - 1) {
-        setImportProgress(((i + 1) / totalRows) * 100);
-        // Small delay only for UI updates, not every trade
-        await new Promise(resolve => setTimeout(resolve, 1));
+      // Update progress after each chunk
+      const processedRows = (chunkIndex + 1) * CHUNK_SIZE;
+      const progress = Math.min((processedRows / totalRows) * 100, 100);
+      setImportProgress(progress);
+
+      // Yield control to browser to prevent freezing
+      if (chunkIndex < chunks.length - 1) {
+        await new Promise(resolve => {
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(resolve);
+          } else {
+            setTimeout(resolve, 0);
+          }
+        });
       }
     }
 
@@ -831,7 +947,10 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     setMappingConfidence({});
     setPreviewTrades([]);
     setImportProgress(0);
+    setError(null);
   }, []);
+
+
 
   // Test function to verify mapping with your exact CSV format
   const testMappingWithUserFormat = useCallback(() => {
@@ -856,9 +975,114 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
     return smartMapping;
   }, [generateSmartMapping]);
 
+  // Show under development banner if upload is disabled
+  if (isUploadDisabled) {
+    return (
+      <Modal
+        isOpen={isOpen}
+        onOpenChange={onOpenChange}
+        size="2xl"
+        classNames={{
+          base: "max-h-[95vh]",
+          body: "p-0",
+          header: "border-b border-divider/50",
+          footer: "border-t border-divider/50"
+        }}
+      >
+        <ModalContent>
+          {(onClose) => (
+            <>
+              <ModalHeader className="flex flex-col gap-1">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-full bg-default-100 dark:bg-default-200/20">
+                    <Icon icon="lucide:construction" className="text-foreground-600 w-5 h-5" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-foreground-800 dark:text-foreground-200">
+                    Upload Feature Under Development
+                  </h2>
+                </div>
+              </ModalHeader>
+
+              <ModalBody className="p-8">
+                <div className="text-center space-y-6">
+                  {/* Main Icon */}
+                  <div className="flex justify-center">
+                    <div className="relative">
+                      <div className="w-20 h-20 rounded-full bg-default-100 dark:bg-default-200/10 flex items-center justify-center">
+                        <Icon icon="lucide:upload-cloud" className="w-10 h-10 text-foreground-500" />
+                      </div>
+                      <div className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-primary flex items-center justify-center">
+                        <Icon icon="lucide:wrench" className="w-3 h-3 text-white" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Message */}
+                  <div className="space-y-3">
+                    <h3 className="text-xl font-semibold text-foreground-800 dark:text-foreground-200">
+                      We're Working on Something Better
+                    </h3>
+                    <p className="text-foreground-600 dark:text-foreground-400 leading-relaxed max-w-md mx-auto">
+                      Our CSV/Excel upload feature is getting a major upgrade to make your trade importing experience even better.
+                    </p>
+                  </div>
+
+                  {/* Features Coming Soon */}
+                  <div className="bg-default-50 dark:bg-default-100/5 rounded-lg p-6 border border-divider/50">
+                    <h4 className="font-medium text-foreground-700 dark:text-foreground-300 mb-4 flex items-center gap-2">
+                      <Icon icon="lucide:sparkles" className="w-4 h-4 text-primary" />
+                      What's Coming:
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-foreground-600 dark:text-foreground-400">
+                      <div className="flex items-center gap-2">
+                        <Icon icon="lucide:zap" className="w-3 h-3 text-foreground-500" />
+                        Faster processing
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Icon icon="lucide:shield-check" className="w-3 h-3 text-foreground-500" />
+                        Better error handling
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Icon icon="lucide:brain" className="w-3 h-3 text-foreground-500" />
+                        Smarter column mapping
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Icon icon="lucide:smartphone" className="w-3 h-3 text-foreground-500" />
+                        Mobile optimization
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Timeline */}
+                  <div className="text-center">
+                    <p className="text-sm text-foreground-500 dark:text-foreground-500">
+                      Expected to be back soon. Thank you for your patience! 🚀
+                    </p>
+                  </div>
+                </div>
+              </ModalBody>
+
+              <ModalFooter className="justify-center">
+                <Button
+                  variant="flat"
+                  size="sm"
+                  onPress={onClose}
+                  className="bg-default-100 hover:bg-default-200 text-foreground-700 dark:bg-default-200/20 dark:hover:bg-default-200/30 dark:text-foreground-300 font-medium px-6 py-2 h-8"
+                  startContent={<Icon icon="lucide:check" className="w-3 h-3" />}
+                >
+                  Got it
+                </Button>
+              </ModalFooter>
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+    );
+  }
+
   return (
-    <Modal 
-      isOpen={isOpen} 
+    <Modal
+      isOpen={isOpen}
       onOpenChange={onOpenChange}
       size="5xl"
       scrollBehavior="inside"
@@ -958,6 +1182,27 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
                       </label>
                     </div>
 
+                    {error && (
+                      <Card className="border-danger">
+                        <CardBody>
+                          <div className="flex items-center gap-2 text-danger">
+                            <Icon icon="lucide:alert-circle" />
+                            <span className="font-medium">Upload Error</span>
+                          </div>
+                          <p className="text-sm text-danger mt-2">{error}</p>
+                          <Button
+                            size="sm"
+                            variant="flat"
+                            color="danger"
+                            className="mt-3"
+                            onPress={() => setError(null)}
+                          >
+                            Try Again
+                          </Button>
+                        </CardBody>
+                      </Card>
+                    )}
+
                     <Card>
                       <CardHeader>
                         <Icon icon="lucide:info" className="text-primary mr-2" />
@@ -974,8 +1219,47 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
                           <div>
                             <h4 className="font-medium mb-2">CSV Files (.csv)</h4>
                             <p className="text-sm text-foreground-500">
-                              Upload comma-separated values file with trade data.
+                              Upload comma-separated values file with trade data. Supports standard CSV format with headers.
                             </p>
+                          </div>
+                        </div>
+
+                        <Divider className="my-4" />
+
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-medium">Sample CSV Format</h4>
+                            <Button
+                              size="sm"
+                              variant="flat"
+                              color="primary"
+                              startContent={<Icon icon="lucide:download" />}
+                              onPress={() => {
+                                // Create sample CSV content
+                                const sampleCSV = `Name,Date,Entry,Quantity,Buy/Sell,Status,Exit Price,Exit Quantity,Setup,Notes
+RELIANCE,2024-01-15,2500,10,Buy,Closed,2650,10,Breakout,Good momentum trade
+TCS,2024-01-16,3200,5,Buy,Open,,,Support,Waiting for breakout
+INFY,2024-01-17,1450,15,Buy,Partial,1520,5,Pullback,Partial exit taken`;
+
+                                // Create and download file
+                                const blob = new Blob([sampleCSV], { type: 'text/csv' });
+                                const url = window.URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = 'trade_journal_template.csv';
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                window.URL.revokeObjectURL(url);
+                              }}
+                            >
+                              Download Template
+                            </Button>
+                          </div>
+                          <div className="bg-default-100 p-3 rounded-lg text-xs font-mono">
+                            <div>Name,Date,Entry,Quantity,Buy/Sell,Status</div>
+                            <div>RELIANCE,2024-01-15,2500,10,Buy,Closed</div>
+                            <div>TCS,2024-01-16,3200,5,Buy,Open</div>
                           </div>
                         </div>
                       </CardBody>
@@ -1231,7 +1515,10 @@ export const TradeUploadModal: React.FC<TradeUploadModalProps> = ({
                           Importing Trades
                         </h3>
                         <p className="text-foreground-500 mb-4">
-                          Please wait while we import your trades...
+                          {importProgress < 100
+                            ? `Processing trades... ${Math.round(importProgress)}%`
+                            : 'Finalizing import...'
+                          }
                         </p>
                         <div className="space-y-3 mb-6">
                           <div className="flex items-center justify-center gap-2 p-3 bg-primary/10 rounded-lg">

@@ -22,7 +22,9 @@ import {
   calcRealizedPL_FIFO
 } from "../utils/tradeCalculations";
 import { calculateTradePL } from "../utils/accountingUtils";
-// Removed Supabase import - using localStorage only
+import { DatabaseService, TradeRecord } from "../db/database";
+import { MigrationService } from "../db/migration";
+// Migrated from localStorage to IndexedDB using Dexie
 
 // Define SortDirection type compatible with HeroUI Table
 type SortDirection = "ascending" | "descending";
@@ -37,115 +39,119 @@ const STORAGE_KEY = 'trades_data';
 const TRADE_SETTINGS_KEY = 'tradeSettings';
 const MISC_DATA_PREFIX = 'misc_';
 
-// localStorage helpers
-function getTradesFromLocalStorage(): Trade[] {
+// IndexedDB helpers using Dexie
+async function getTradesFromIndexedDB(): Promise<Trade[]> {
   if (typeof window === 'undefined') return []; // In a server-side environment, return empty array
 
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Validate the parsed data
-      if (Array.isArray(parsed)) {
-        return parsed;
-      } else {
-        throw new Error('Invalid data format: not an array');
-      }
-    }
-    return [];
+    const trades = await DatabaseService.getAllTrades();
+    console.log(`📊 Loaded ${trades.length} trades from IndexedDB`);
+    return trades;
   } catch (error) {
-    console.error('Error loading trades from localStorage:', error);
+    console.error('❌ Error loading trades from IndexedDB:', error);
 
     // Try to recover from backup
     try {
-      const backup = localStorage.getItem(`${STORAGE_KEY}_backup`);
-      if (backup) {
-        const parsedBackup = JSON.parse(backup);
-        if (Array.isArray(parsedBackup)) {
-          console.log('Recovered trades from backup');
-          // Restore the main storage from backup
-          localStorage.setItem(STORAGE_KEY, backup);
-          return parsedBackup;
-        }
+      const backup = await DatabaseService.getLatestBackup('trades');
+      if (backup && backup.data && Array.isArray(backup.data)) {
+        console.log('🔄 Recovered trades from IndexedDB backup');
+        return backup.data;
       }
     } catch (backupError) {
-      console.error('Failed to recover from backup:', backupError);
+      console.error('❌ Failed to recover from IndexedDB backup:', backupError);
     }
 
     return []; // Always return empty array on error to prevent mock data
   }
 }
 
-function saveTradesToLocalStorage(trades: Trade[]) {
+async function saveTradesToIndexedDB(trades: Trade[]): Promise<boolean> {
   if (typeof window === 'undefined') return false;
+
+  console.log(`💾 [saveTradesToIndexedDB] Starting save of ${trades.length} trades...`);
 
   try {
     // Create backup before saving
-    const existing = localStorage.getItem(STORAGE_KEY);
-    if (existing) {
-      localStorage.setItem(`${STORAGE_KEY}_backup`, existing);
+    console.log(`💾 [saveTradesToIndexedDB] Creating backup...`);
+    await DatabaseService.createBackup('trades', trades, 'Auto-backup before save');
+
+    // Convert trades to TradeRecord format with timestamps
+    const tradesWithTimestamps: TradeRecord[] = trades.map(trade => ({
+      ...trade,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }));
+
+    console.log(`💾 [saveTradesToIndexedDB] Saving to database...`);
+    const success = await DatabaseService.saveAllTrades(tradesWithTimestamps);
+
+    if (success) {
+      console.log(`✅ [saveTradesToIndexedDB] Successfully saved ${trades.length} trades to IndexedDB`);
+
+      // Verify the save by reading back
+      const savedTrades = await DatabaseService.getAllTrades();
+      console.log(`✅ [saveTradesToIndexedDB] Verification: ${savedTrades.length} trades found in database`);
+    } else {
+      console.error(`❌ [saveTradesToIndexedDB] Save operation returned false`);
     }
 
-    const serialized = JSON.stringify(trades);
-    localStorage.setItem(STORAGE_KEY, serialized);
-
-    // Verify the save was successful
-    const verification = localStorage.getItem(STORAGE_KEY);
-    if (verification !== serialized) {
-      throw new Error('localStorage verification failed');
-    }
-
-    return true;
+    return success;
   } catch (error) {
-    console.error('localStorage save error:', error);
+    console.error('❌ [saveTradesToIndexedDB] IndexedDB save error:', error);
 
-    // Try to restore from backup if save failed
+    // IndexedDB doesn't have quota issues like localStorage, but handle other errors
     try {
-      const backup = localStorage.getItem(`${STORAGE_KEY}_backup`);
-      if (backup) {
-        localStorage.setItem(STORAGE_KEY, backup);
-        console.log('Restored trades from backup');
+      // Try to restore from backup if save failed
+      const backup = await DatabaseService.getLatestBackup('trades');
+      if (backup && backup.data) {
+        await DatabaseService.saveAllTrades(backup.data);
+        console.log('🔄 Restored trades from IndexedDB backup');
+        return true;
       }
     } catch (restoreError) {
-      console.error('Failed to restore from backup:', restoreError);
+      console.error('❌ Failed to restore from IndexedDB backup:', restoreError);
     }
 
     return false;
   }
 }
 
-function getTradeSettings() {
+async function getTradeSettings() {
   if (typeof window === 'undefined') return null;
   try {
-    const stored = localStorage.getItem(TRADE_SETTINGS_KEY);
-    return stored ? JSON.parse(stored) : null;
+    const settings = await DatabaseService.getTradeSettings();
+    return settings;
   } catch (error) {
-    console.error('Error fetching trade settings:', error);
+    console.error('❌ Error fetching trade settings from IndexedDB:', error);
     return null;
   }
 }
 
-function saveTradeSettings(settings: any) {
+async function saveTradeSettings(settings: any): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
-    localStorage.setItem(TRADE_SETTINGS_KEY, JSON.stringify(settings));
-    return true;
+    return await DatabaseService.saveTradeSettings(settings);
   } catch (error) {
-    console.error('localStorage save error for settings:', error);
+    console.error('❌ IndexedDB save error for settings:', error);
     return false;
   }
 }
 
-function clearAllTradeAndSettingsData() {
+async function clearAllTradeAndSettingsData(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
-    console.log('🗑️ Starting comprehensive localStorage clearing...');
+    console.log('🗑️ Starting comprehensive IndexedDB clearing...');
 
-    // Core trade data
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(TRADE_SETTINGS_KEY);
+    // Clear all IndexedDB data
+    const success = await DatabaseService.clearAllData();
 
-    // Clear all misc_ data
+    if (success) {
+      console.log('✅ Cleared all IndexedDB data');
+    } else {
+      console.error('❌ Failed to clear IndexedDB data');
+    }
+
+    // Also clear any remaining localStorage data for legacy cleanup
     const keysToRemove = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -190,10 +196,10 @@ function clearAllTradeAndSettingsData() {
       console.error('❌ Failed to clear sessionStorage:', error);
     }
 
-    console.log('✅ Comprehensive localStorage clearing completed');
-    return true;
+    console.log('✅ Comprehensive data clearing completed');
+    return success;
   } catch (error) {
-    console.error('💥 Error clearing all trade and settings data from localStorage:', error);
+    console.error('💥 Error clearing all trade and settings data:', error);
     return false;
   }
 }
@@ -358,8 +364,35 @@ function recalculateAllTrades(
     // Destructure to omit openHeat if it exists on the trade object from localStorage
     const { openHeat, ...restOfTrade } = trade as any; // Use 'as any' for robust destructuring if openHeat might not exist
 
+    // Calculate position status based on quantities ONLY if user has never manually set it
+    let calculatedPositionStatus = restOfTrade.positionStatus; // Keep existing by default
+
+    const hasUserEditedPositionStatus = restOfTrade._userEditedFields?.includes('positionStatus');
+    if (!hasUserEditedPositionStatus) {
+      // Auto-calculate position status only if user hasn't manually set it
+      if (finalOpenQty <= 0 && exitedQty > 0) {
+        calculatedPositionStatus = 'Closed';
+      } else if (exitedQty > 0 && finalOpenQty > 0) {
+        calculatedPositionStatus = 'Partial';
+      } else {
+        calculatedPositionStatus = 'Open';
+      }
+
+    }
+
+    // Preserve user-controlled fields that should not be auto-updated
+    const userControlledFields = ['positionStatus', 'buySell', 'setup', 'exitTrigger', 'proficiencyGrowthAreas', 'planFollowed', 'notes', 'tradeNo'];
+    const preservedFields: Record<string, any> = {};
+
+    userControlledFields.forEach(field => {
+      if (restOfTrade._userEditedFields?.includes(field) && restOfTrade[field as keyof Trade] !== undefined) {
+        preservedFields[field] = restOfTrade[field as keyof Trade];
+      }
+    });
+
     return {
       ...restOfTrade,
+      // Apply calculated fields
       name: (restOfTrade.name || '').toUpperCase(),
       avgEntry,
       positionSize,
@@ -373,7 +406,12 @@ function recalculateAllTrades(
       realisedAmount,
       plRs,
       pfImpact,
+      positionStatus: calculatedPositionStatus, // Use calculated or preserved status
       cummPf: 0, // Placeholder, will be updated in second pass
+      // Preserve user-edited fields
+      ...preservedFields,
+      // Always preserve the user edit tracking
+      _userEditedFields: restOfTrade._userEditedFields || []
     };
   });
 
@@ -439,11 +477,14 @@ const ALL_COLUMNS = [
   'planFollowed', 'exitTrigger', 'proficiencyGrowthAreas', 'unrealizedPL', 'actions', 'notes'
 ];
 
-// Optimized default columns for better performance - show only essential columns initially
+// All columns enabled by default as requested
 const DEFAULT_VISIBLE_COLUMNS = [
-  'tradeNo', 'date', 'name', 'setup', 'buySell', 'entry', 'sl', 'cmp',
-  'initialQty', 'positionSize', 'openQty', 'exitedQty', 'avgExitPrice',
-  'rewardRisk', 'holdingDays', 'positionStatus', 'plRs', 'actions'
+  'tradeNo', 'date', 'name', 'setup', 'buySell', 'entry', 'avgEntry', 'sl', 'slPercent', 'tsl', 'cmp',
+  'initialQty', 'pyramid1Price', 'pyramid1Qty', 'pyramid1Date', 'pyramid2Price', 'pyramid2Qty', 'pyramid2Date',
+  'positionSize', 'allocation', 'exit1Price', 'exit1Qty', 'exit1Date', 'exit2Price', 'exit2Qty', 'exit2Date',
+  'exit3Price', 'exit3Qty', 'exit3Date', 'openQty', 'exitedQty', 'avgExitPrice', 'stockMove', 'openHeat',
+  'rewardRisk', 'holdingDays', 'positionStatus', 'realisedAmount', 'plRs', 'pfImpact', 'cummPf',
+  'planFollowed', 'exitTrigger', 'proficiencyGrowthAreas', 'actions', 'unrealizedPL', 'notes'
 ];
 
 export const useTrades = () => {
@@ -502,36 +543,64 @@ export const useTrades = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Load from localStorage on mount. This effect should run only ONCE.
+  // Load from IndexedDB on mount with migration support
   React.useEffect(() => {
-    setIsLoading(true);
-    const loadedTrades = getTradesFromLocalStorage();
-    const settings = getTradeSettings();
+    const loadData = async () => {
+      setIsLoading(true);
 
-    // Perform initial recalculation using the memoized helper.
-    // This will use the initial `getPortfolioSize` available at mount.
-    const initiallyCalculatedTrades = loadedTrades.length > 0 ? recalculateTradesWithCurrentPortfolio(loadedTrades) : [];
+      try {
+        // Check if migration is needed
+        const needsMigration = await MigrationService.needsMigration();
 
-    // Temporary fix: Reset filters to avoid "No matching trades" issue
-    const savedSearchQuery = settings?.search_query || '';
-    const savedStatusFilter = settings?.status_filter || '';
+        if (needsMigration) {
+          console.log('🔄 Migration needed from localStorage to IndexedDB');
+          const migrationResult = await MigrationService.migrateFromLocalStorage();
 
+          if (migrationResult.success) {
+            console.log('✅ Migration completed successfully');
+            // Optionally clean up localStorage after successful migration
+            // await MigrationService.cleanupLocalStorage();
+          } else {
+            console.error('❌ Migration failed:', migrationResult.message);
+          }
+        }
 
+        // Load trades from IndexedDB
+        const loadedTrades = await getTradesFromIndexedDB();
+        const settings = await getTradeSettings();
 
-    // Set all state together to avoid race conditions
-    setTrades(initiallyCalculatedTrades);
-    setSearchQuery(savedSearchQuery);
-    setStatusFilter(savedStatusFilter);
-    setSortDescriptor(settings?.sort_descriptor || { column: 'tradeNo', direction: 'ascending' });
-    setVisibleColumns(settings?.visible_columns || DEFAULT_VISIBLE_COLUMNS);
+        // Perform initial recalculation using the memoized helper
+        const initiallyCalculatedTrades = loadedTrades.length > 0 ? recalculateTradesWithCurrentPortfolio(loadedTrades) : [];
 
-    // Use a small delay to ensure all state is set before marking as loaded
-    setTimeout(() => {
-      setIsLoading(false);
-    }, 50);
+        // Extract settings values
+        const savedSearchQuery = settings?.search_query || '';
+        const savedStatusFilter = settings?.status_filter || '';
+
+        // Set all state together to avoid race conditions
+        setTrades(initiallyCalculatedTrades);
+        setSearchQuery(savedSearchQuery);
+        setStatusFilter(savedStatusFilter);
+        setSortDescriptor(settings?.sort_descriptor || { column: 'tradeNo', direction: 'ascending' });
+        setVisibleColumns(settings?.visible_columns || DEFAULT_VISIBLE_COLUMNS);
+
+        console.log(`📊 Loaded ${initiallyCalculatedTrades.length} trades from IndexedDB`);
+
+      } catch (error) {
+        console.error('❌ Failed to load data:', error);
+        // Set empty state on error
+        setTrades([]);
+      } finally {
+        // Use a small delay to ensure all state is set before marking as loaded
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 50);
+      }
+    };
+
+    loadData();
   }, []); // Empty dependency array means it runs only once on mount.
 
-  // Save trade settings to localStorage
+  // Save trade settings to IndexedDB
   React.useEffect(() => {
     if (!isLoading) {
       const settings = {
@@ -540,26 +609,28 @@ export const useTrades = () => {
         sort_descriptor: sortDescriptor,
         visible_columns: visibleColumns
       };
-      saveTradeSettings(settings);
+      saveTradeSettings(settings).then(success => {
+        console.log(`📊 [useTrades] Settings save ${success ? 'successful' : 'failed'}`);
+      });
     }
   }, [searchQuery, statusFilter, sortDescriptor, visibleColumns, isLoading]);
 
-  // Debounced save to localStorage to prevent excessive writes
-  React.useEffect(() => {
-    if (trades.length > 0 || !isLoading) {
-      const timeoutId = setTimeout(() => {
-        saveTradesToLocalStorage(trades);
-      }, 100); // Reduced to 100ms for better responsiveness
-
-      return () => clearTimeout(timeoutId);
-    }
-  }, [trades, isLoading]);
+  // DISABLED: This effect was causing race conditions with user input
+  // localStorage saving is now handled directly in updateTrade, addTrade, deleteTrade functions
+  // React.useEffect(() => {
+  //   if (trades.length > 0 || !isLoading) {
+  //     const timeoutId = setTimeout(() => {
+  //       saveTradesToLocalStorage(trades);
+  //     }, 100);
+  //     return () => clearTimeout(timeoutId);
+  //   }
+  // }, [trades, isLoading]);
 
   // Recalculate trades when accounting method changes (optimized to prevent excessive re-renders)
   React.useEffect(() => {
     // Only recalculate if accounting method actually changed
     if (prevAccountingMethodRef.current !== accountingMethod && !isLoading && trades.length > 0) {
-      console.log(`🔄 Accounting method changed from ${prevAccountingMethodRef.current} to ${accountingMethod}, recalculating trades...`);
+
 
       // Debounce the recalculation to prevent rapid successive calls
       const timeoutId = setTimeout(() => {
@@ -576,32 +647,150 @@ export const useTrades = () => {
   }, [accountingMethod]); // Only depend on accounting method to avoid circular dependencies
 
   const addTrade = React.useCallback((trade: Trade) => {
+    console.log(`➕ [addTrade] Adding new trade: ${trade.name} (${trade.id})`);
+
     setTrades(prev => {
+      console.log(`➕ [addTrade] Current trades count: ${prev.length}`);
+
       // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio([trade, ...prev]);
-      saveTradesToLocalStorage(newTrades); // Persist to localStorage
+      // Add new trade at the END of the array so it appears at the bottom
+      const newTrades = recalculateTradesWithCurrentPortfolio([...prev, trade]);
+      console.log(`➕ [addTrade] After adding and recalculating: ${newTrades.length} trades`);
+
+      // Persist to IndexedDB asynchronously
+      saveTradesToIndexedDB(newTrades).then(success => {
+        console.log(`📊 [addTrade] IndexedDB save ${success ? 'successful' : 'failed'}`);
+        if (!success) {
+          console.error('❌ [addTrade] Failed to save to IndexedDB - data may be lost on refresh!');
+        }
+      }).catch(error => {
+        console.error('❌ [addTrade] IndexedDB save error:', error);
+      });
+
       return newTrades;
     });
   }, [recalculateTradesWithCurrentPortfolio]); // Dependency on the memoized helper
 
-  const updateTrade = React.useCallback((updatedTrade: Trade) => {
-    setTrades(prev => {
-      // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio(
-        prev.map(trade => trade.id === updatedTrade.id ? updatedTrade : trade)
-      );
-      saveTradesToLocalStorage(newTrades); // Persist to localStorage
-      return newTrades;
-    });
+  // Debounced update function to prevent excessive recalculations
+  const debouncedRecalculateRef = React.useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdatesRef = React.useRef<Map<string, Trade>>(new Map());
+  const updateCallbacksRef = React.useRef<Map<string, () => void>>(new Map());
+
+  const updateTrade = React.useCallback((updatedTrade: Trade, onComplete?: () => void) => {
+    console.log(`✏️ [updateTrade] Updating trade: ${updatedTrade.name} (${updatedTrade.id})`);
+
+    // Store pending update
+    pendingUpdatesRef.current.set(updatedTrade.id, updatedTrade);
+    console.log(`✏️ [updateTrade] Stored pending update. Total pending: ${pendingUpdatesRef.current.size}`);
+
+    // Store callback if provided
+    if (onComplete) {
+      updateCallbacksRef.current.set(updatedTrade.id, onComplete);
+    }
+
+    // Clear existing debounce timer
+    if (debouncedRecalculateRef.current) {
+      clearTimeout(debouncedRecalculateRef.current);
+      console.log(`✏️ [updateTrade] Cleared existing debounce timer`);
+    }
+
+    // Schedule debounced recalculation
+    debouncedRecalculateRef.current = setTimeout(() => {
+      console.log(`⏰ [updateTrade] Debounced execution starting...`);
+
+      // Get all pending updates and callbacks
+      const pendingUpdates = Array.from(pendingUpdatesRef.current.values());
+      const callbacks = Array.from(updateCallbacksRef.current.values());
+      console.log(`⏰ [updateTrade] Processing ${pendingUpdates.length} pending updates`);
+
+      // Clear pending updates and callbacks
+      pendingUpdatesRef.current.clear();
+      updateCallbacksRef.current.clear();
+
+      // Apply all pending updates and recalculate
+      setTrades(currentTrades => {
+        console.log(`⏰ [updateTrade] Applying updates to ${currentTrades.length} trades`);
+
+        const updatedTrades = currentTrades.map(trade => {
+          // CRITICAL FIX: Handle cash basis expanded trade IDs
+          // Find pending updates by checking both exact ID match and original ID match
+          const pendingUpdate = pendingUpdates.find(update => {
+            // Direct match (for accrual basis)
+            if (update.id === trade.id) return true;
+
+            // Original ID match (for cash basis expanded trades)
+            const originalUpdateId = update.id.includes('_exit_') ? update.id.split('_exit_')[0] : update.id;
+            return originalUpdateId === trade.id;
+          });
+
+          if (pendingUpdate) {
+            console.log(`⏰ [updateTrade] Applying update to trade: ${trade.name} (original ID: ${trade.id}, update ID: ${pendingUpdate.id})`);
+
+            // CRITICAL: For cash basis updates, we need to merge the changes into the original trade
+            // but preserve the original trade ID (not the expanded ID)
+            const updatedTrade = { ...pendingUpdate, id: trade.id };
+            return updatedTrade;
+          }
+          return trade;
+        });
+
+        console.log(`⏰ [updateTrade] Starting recalculation...`);
+        const recalculatedTrades = recalculateTradesWithCurrentPortfolio(updatedTrades);
+
+        console.log(`⏰ [updateTrade] Saving to IndexedDB...`);
+        saveTradesToIndexedDB(recalculatedTrades).then(saveSuccess => {
+          console.log(`⏰ [updateTrade] IndexedDB save ${saveSuccess ? 'successful' : 'failed'}`);
+        });
+
+        // Execute all callbacks after update is complete
+        callbacks.forEach(callback => {
+          try {
+            callback();
+          } catch (error) {
+            console.error('Error executing update callback:', error);
+          }
+        });
+
+        console.log(`✅ [updateTrade] Update process completed`);
+        return recalculatedTrades;
+      });
+    }, 200); // Reduced to 200ms to prevent race conditions with user input
   }, [recalculateTradesWithCurrentPortfolio]);
 
   const deleteTrade = React.useCallback((id: string) => {
+    console.log(`🗑️ [deleteTrade] Starting delete for trade ID: ${id}`);
+
+    // CRITICAL FIX: Handle cash basis expanded trade IDs
+    // Extract original trade ID from expanded IDs like "original_id_exit_0"
+    const originalTradeId = id.includes('_exit_') ? id.split('_exit_')[0] : id;
+    console.log(`🗑️ [deleteTrade] Original trade ID: ${originalTradeId} (from ${id})`);
+
     setTrades(prev => {
+      console.log(`🗑️ [deleteTrade] Current trades count: ${prev.length}`);
+
+      // Find the trade to delete using the original ID
+      const tradeToDelete = prev.find(trade => trade.id === originalTradeId);
+      if (!tradeToDelete) {
+        console.error(`❌ [deleteTrade] Trade with original ID ${originalTradeId} not found!`);
+        console.log(`🗑️ [deleteTrade] Available trade IDs:`, prev.map(t => t.id));
+        return prev; // Return unchanged if trade not found
+      }
+
+      console.log(`🗑️ [deleteTrade] Found trade to delete: ${tradeToDelete.name} (${tradeToDelete.tradeNo})`);
+
+      // Filter out the trade using the original ID
+      const filteredTrades = prev.filter(trade => trade.id !== originalTradeId);
+      console.log(`🗑️ [deleteTrade] After filtering: ${filteredTrades.length} trades remaining`);
+
       // Use the memoized recalculation helper
-      const newTrades = recalculateTradesWithCurrentPortfolio(
-        prev.filter(trade => trade.id !== id)
-      );
-      saveTradesToLocalStorage(newTrades); // Persist to localStorage
+      const newTrades = recalculateTradesWithCurrentPortfolio(filteredTrades);
+      console.log(`🗑️ [deleteTrade] After recalculation: ${newTrades.length} trades`);
+
+      // Persist to IndexedDB
+      saveTradesToIndexedDB(newTrades).then(saveSuccess => {
+        console.log(`🗑️ [deleteTrade] IndexedDB save ${saveSuccess ? 'successful' : 'failed'}`);
+      });
+
       return newTrades;
     });
   }, [recalculateTradesWithCurrentPortfolio]);
@@ -617,7 +806,10 @@ export const useTrades = () => {
 
       // First pass: Skip expensive calculations for faster import
       const quickProcessedTrades = recalculateTradesWithCurrentPortfolio(combinedTrades, true);
-      saveTradesToLocalStorage(quickProcessedTrades); // Single localStorage write
+      // Save to IndexedDB asynchronously
+      saveTradesToIndexedDB(quickProcessedTrades).then(success => {
+        console.log(`📊 [bulkImport] Quick save ${success ? 'successful' : 'failed'}`);
+      });
 
       const endTime = performance.now();
       console.log(`⚡ Fast bulk import completed in ${(endTime - startTime).toFixed(2)}ms`);
@@ -631,7 +823,10 @@ export const useTrades = () => {
 
         setTrades(currentTrades => {
           const fullyCalculatedTrades = recalculateTradesWithCurrentPortfolio(currentTrades, false);
-          saveTradesToLocalStorage(fullyCalculatedTrades);
+          // Save fully calculated trades to IndexedDB
+          saveTradesToIndexedDB(fullyCalculatedTrades).then(success => {
+            console.log(`📊 [bulkImport] Full recalc save ${success ? 'successful' : 'failed'}`);
+          });
 
           const recalcEndTime = performance.now();
           console.log(`✅ Full recalculation completed in ${(recalcEndTime - recalcStartTime).toFixed(2)}ms`);
@@ -646,10 +841,12 @@ export const useTrades = () => {
     });
   }, [recalculateTradesWithCurrentPortfolio]);
 
-  const clearAllTrades = React.useCallback(() => {
+  const clearAllTrades = React.useCallback(async () => {
     console.log('🗑️ Starting clearAllTrades process...');
 
-    if (clearAllTradeAndSettingsData()) {
+    const success = await clearAllTradeAndSettingsData();
+
+    if (success) {
       // Reset all React state to initial values
       setTrades([]);
       setSearchQuery('');
@@ -684,25 +881,77 @@ export const useTrades = () => {
     return false;
   }, []);
 
-  // Helper function to get accounting-aware values for display (optimized with caching)
+  // Helper function to get accounting-aware values for display (FIXED - always calculate)
   const getAccountingAwareValues = React.useCallback((trade: Trade) => {
-    const isAccrual = !useCashBasis;
+    // CRITICAL FIX: Always calculate P/L instead of relying on potentially missing cached values
+    const plRs = calculateTradePL(trade, useCashBasis);
 
-    // Use cached values when available to avoid recalculation
-    const plRs = isAccrual
-      ? (trade._accrualPL ?? trade.plRs ?? 0)
-      : (trade._cashPL ?? calculateTradePL(trade, true));
+    // Calculate portfolio impact based on the calculated P/L
+    const currentPortfolioSize = getPortfolioSize ?
+      (() => {
+        const tradeDate = new Date(trade.date);
+        const month = tradeDate.toLocaleString('default', { month: 'short' });
+        const year = tradeDate.getFullYear();
+        return getPortfolioSize(month, year);
+      })() : portfolioSize;
 
-    const pfImpact = isAccrual
-      ? (trade._accrualPfImpact ?? trade.pfImpact ?? 0)
-      : (trade._cashPfImpact ?? 0);
+    const pfImpact = currentPortfolioSize > 0 ? (plRs / currentPortfolioSize) * 100 : 0;
 
     return {
       plRs,
       realisedAmount: plRs, // Same as plRs for display purposes
       pfImpact,
     };
-  }, [useCashBasis]);
+  }, [useCashBasis, calculateTradePL, getPortfolioSize, portfolioSize]);
+
+  // Helper function to group expanded trades for display
+  const groupTradesForDisplay = React.useCallback((expandedTrades: Trade[]) => {
+    if (!useCashBasis) return expandedTrades;
+
+    const groupedMap = new Map<string, Trade>();
+    const expandedTradesMap = new Map<string, Trade[]>();
+
+    expandedTrades.forEach(trade => {
+      const originalId = trade.id.split('_exit_')[0];
+
+      if (trade._cashBasisExit) {
+        // This is an expanded trade for cash basis
+        if (!expandedTradesMap.has(originalId)) {
+          expandedTradesMap.set(originalId, []);
+        }
+        expandedTradesMap.get(originalId)!.push(trade);
+      } else {
+        // This is an original trade (open position or single exit)
+        groupedMap.set(originalId, trade);
+      }
+    });
+
+    // Merge expanded trades back into single display entries
+    expandedTradesMap.forEach((expandedTrades, originalId) => {
+      if (expandedTrades.length === 0) return;
+
+      // Use the first expanded trade as base and aggregate the cash basis data
+      const baseTrade = expandedTrades[0];
+      const aggregatedTrade: Trade = {
+        ...baseTrade,
+        id: originalId, // Use original ID for display
+        // Aggregate P/L from all exits for display
+        plRs: expandedTrades.reduce((sum, t) => sum + (calculateTradePL(t, true) || 0), 0),
+        // Keep the latest exit date for sorting
+        _cashBasisExit: expandedTrades.reduce((latest, current) => {
+          if (!latest || !current._cashBasisExit) return current._cashBasisExit;
+          if (!latest.date || !current._cashBasisExit.date) return latest;
+          return new Date(current._cashBasisExit.date) > new Date(latest.date) ? current._cashBasisExit : latest;
+        }, expandedTrades[0]._cashBasisExit),
+        // Store expanded trades for backend calculations
+        _expandedTrades: expandedTrades
+      };
+
+      groupedMap.set(originalId, aggregatedTrade);
+    });
+
+    return Array.from(groupedMap.values());
+  }, [useCashBasis, calculateTradePL]);
 
   const filteredTrades = React.useMemo(() => {
     let result = [...trades];
@@ -750,7 +999,8 @@ export const useTrades = () => {
         }
       });
 
-      result = expandedTrades;
+      // Group expanded trades for display while preserving backend calculations
+      result = groupTradesForDisplay(expandedTrades);
     }
 
     // Apply global filter using accounting method-aware date
@@ -816,6 +1066,26 @@ export const useTrades = () => {
         return sortDescriptor.direction === "ascending" ? comparison : -comparison;
       });
     }
+
+    // CRITICAL FIX: Recalculate cumulative PF based on display order
+    // This ensures cumulative values make sense based on how trades are actually shown
+    let runningDisplayCummPf = 0;
+    result = result.map((trade) => {
+      // Get the accounting-aware PF Impact for this trade
+      const currentPfImpact = useCashBasis
+        ? (trade._cashPfImpact ?? 0)
+        : (trade._accrualPfImpact ?? trade.pfImpact ?? 0);
+
+      // Only include PF Impact from closed/partial trades in cumulative calculation
+      if (trade.positionStatus !== 'Open') {
+        runningDisplayCummPf += currentPfImpact;
+      }
+
+      return {
+        ...trade,
+        cummPf: runningDisplayCummPf // Update with display-order cumulative PF
+      };
+    });
 
     return result;
   }, [trades, globalFilter, searchQuery, statusFilter, sortDescriptor, useCashBasis]);
